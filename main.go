@@ -5,11 +5,9 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -93,6 +91,7 @@ func customMiddleWare() wish.Middleware {
 			messages:  []message{},
 			fingerPrint: fingerPrint,
 			textarea: ta,
+			page: PageIntro,
 		}
 		program := tea.NewProgram(m, append(bubbletea.MakeOptions(s), tea.WithAltScreen())...)
 		
@@ -108,12 +107,21 @@ type message struct {
 	content string
 }
 
+type Page string
+
+const (
+	PageIntro Page = "intro"
+	PageGame Page = "game"
+	PageChat Page = "chat"
+)
+
 // Just a generic tea.Model to demo terminal information of ssh.
 type model struct {
 	counter   int
 	messages  []message
 	textarea  textarea.Model
 	fingerPrint string
+	page Page
 }
 
 func (m model) Init() tea.Cmd {
@@ -121,44 +129,40 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var tiCmd tea.Cmd
-	m.textarea, tiCmd = m.textarea.Update(msg)
-	rescmds := []tea.Cmd{}
-
+	// Handle global commands
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
-		case "enter":
-			cmds := sessionManager.SendMessage(message{sender: m.fingerPrint, content: m.textarea.Value()})
-			rescmds = append(rescmds, cmds...)
-			m.textarea.Reset()
 		}
-	case message:
-		m.messages = append(m.messages, msg)
 	}
 
-	rescmds = append(rescmds, tiCmd)
-
-	m.counter++
-	return m, tea.Batch(rescmds...)
+	// Route to page-specific update handlers
+	switch m.page {
+	case PageChat:
+		var cmd tea.Cmd
+		m, cmd = m.UpdateChat(msg)
+		m.counter++
+		return m, cmd
+	case PageIntro:
+		var cmd tea.Cmd
+		m, cmd = m.UpdateIntro(msg)
+		m.counter++
+		return m, cmd
+	default:
+		m.counter++
+		return m, nil
+	}
 }
 
 func (m model) View() string {
-	s := fmt.Sprintf("counter: %d", m.counter)
-
-	s += "\n\n"
-	
-	var msgsBuilder strings.Builder
-	for _, msg := range m.messages {
-		fmt.Fprintf(&msgsBuilder, "%s: %s\n", msg.sender, msg.content)
+	switch m.page {
+	case PageChat:
+		return m.ViewChat()
+	case PageIntro:
+		return m.ViewIntro()
+	default:
+		return "Unknown page"
 	}
-
-	s += fmt.Sprintf("messages: %s", msgsBuilder.String())
-
-	s += "\n\n"
-	s += m.textarea.View()
-	
-	return s
 }
