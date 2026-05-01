@@ -22,11 +22,11 @@ func (s *SessionManager) RemoveProgram(fingerPrint string) {
 	delete(s.fingerPrintToProgram, fingerPrint)
 }
 
-func (s *SessionManager) SendMessage(msg message) tea.BatchMsg {
+func (s *SessionManager) SendMessage(senderFingerprint string, msg message) tea.BatchMsg {
 	var cmds []tea.Cmd
 	for fingerPrint, program := range s.fingerPrintToProgram {
 		cmf := func() tea.Msg {
-			if(msg.sender == fingerPrint) {
+			if senderFingerprint == fingerPrint {
 				return msg
 			} else {
 				program.Send(msg)

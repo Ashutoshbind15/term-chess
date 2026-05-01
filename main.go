@@ -11,7 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/log"
 	"github.com/charmbracelet/ssh"
@@ -81,18 +83,19 @@ func customMiddleWare() wish.Middleware {
 		// pty, _, active:= s.Pty()
 		fingerPrint := s.Context().Value("fingerprint").(string)
 		chatTa := common.InitTextArea()
-		usernameInputTa := common.InitTextArea()
+		usernameInputTa := common.InitTextInput()
 
 		player := dataManager.GetPlayer(fingerPrint)
 
-		m:= model{
-			counter:   0,
-			messages:  []message{},
-			fingerPrint: fingerPrint,
-			chatTextarea: chatTa,
+		m := model{
+			counter:       0,
+			messages:      []message{},
+			fingerPrint:   fingerPrint,
+			chatTextarea:  chatTa,
 			usernameInput: usernameInputTa,
-			page: PageIntro,
-			player: player,
+			page:          PageIntro,
+			player:        player,
+			pageList:      newPageList(80, 22),
 		}
 		
 		program := tea.NewProgram(m, append(bubbletea.MakeOptions(s), tea.WithAltScreen())...)
@@ -105,31 +108,66 @@ func customMiddleWare() wish.Middleware {
 }
 
 type message struct {
-	sender string
+	sender  string
 	content string
 }
 
 type Page string
 
 const (
-	PageIntro Page = "intro"
-	PageGame Page = "game"
-	PageChat Page = "chat"
+	PageIntro  Page = "intro"
+	PageChat   Page = "chat"
+	PageSelect Page = "select"
 )
 
 // Just a generic tea.Model to demo terminal information of ssh.
 type model struct {
-	counter   int
-	messages  []message
-	chatTextarea  textarea.Model
-	usernameInput textarea.Model
-	fingerPrint string
-	page Page
-	player *common.Player
+	counter      int
+	messages     []message
+	chatTextarea textarea.Model
+	usernameInput textinput.Model
+	fingerPrint  string
+	page         Page
+	previousPage *Page
+	player       *common.Player
+	pageList     list.Model
 }
 
 func (m model) Init() tea.Cmd {
 	return nil
+}
+
+func (m model) navigateTo(page Page) model {
+	// todo: add a toast or some sort of feedback for
+	// an unexpected action
+	if page == PageChat && m.player == nil {
+		m.page = PageIntro
+		return m
+	}
+
+	m.page = page
+	return m
+}
+
+func (m model) openPageSelect() model {
+	if m.page == PageSelect {
+		return m
+	}
+
+	previousPage := m.page
+	m.previousPage = &previousPage
+	m.page = PageSelect
+	return m
+}
+
+func (m model) closePageSelect() model {
+	if m.previousPage == nil {
+		return m
+	}
+
+	m.page = *m.previousPage
+	m.previousPage = nil
+	return m
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -139,11 +177,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "tab":
+			m = m.openPageSelect()
 		}
 	}
 
 	// Route to page-specific update handlers
 	switch m.page {
+	case PageSelect:
+		var cmd tea.Cmd
+		m, cmd = m.UpdateSelect(msg)
+		m.counter++
+		return m, cmd
 	case PageChat:
 		var cmd tea.Cmd
 		m, cmd = m.UpdateChat(msg)
@@ -162,6 +207,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	switch m.page {
+	case PageSelect:
+		return m.ViewSelect()
 	case PageChat:
 		return m.ViewChat()
 	case PageIntro:

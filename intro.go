@@ -31,14 +31,14 @@ func (m model) UpdateIntro(msg tea.Msg) (model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
-			m.page = PageChat
+			m = m.navigateTo(PageChat)
 		case "enter":
 			// check if model.player is nil
 			// and the text input is non-empty
 			if m.player == nil && m.usernameInput.Value() != "" {
 				m.player = &common.Player{Fingerprint: m.fingerPrint, Username: m.usernameInput.Value()}
 				dataManager.AddPlayer(*m.player)
-				m.page = PageChat
+				m = m.navigateTo(PageChat)
 			}
 		}
 	}

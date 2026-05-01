@@ -17,7 +17,14 @@ func (m model) UpdateChat(msg tea.Msg) (model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "enter":
-			cmds := sessionManager.SendMessage(message{sender: m.fingerPrint, content: m.chatTextarea.Value()})
+			if m.player == nil {
+				return m, tiCmd
+			}
+
+			cmds := sessionManager.SendMessage(m.fingerPrint, message{
+				sender:  m.player.Username,
+				content: m.chatTextarea.Value(),
+			})
 			rescmds = append(rescmds, cmds...)
 			m.chatTextarea.Reset()
 		}
