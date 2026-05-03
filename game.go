@@ -16,7 +16,9 @@ func notifyOpponentJoined(gameID string, joinerFingerprint string) {
 		return
 	}
 	if prog := sessionManager.GetProgram(opp); prog != nil {
-		prog.Send(opponentJoinedGameMsg{})
+		prog.Send(opponentJoinedGameMsg{
+			opponentName: gameManager.PlayerUsername(joinerFingerprint),
+		})
 	}
 }
 
@@ -38,21 +40,6 @@ const (
 	gameHelpMove       = "Make a move: type UCI like e2e4 and press enter"
 	gameNoGame         = "No game"
 )
-
-var fenPieceToGlyph = map[rune]string{
-	'K': "♔",
-	'Q': "♕",
-	'R': "♖",
-	'B': "♗",
-	'N': "♘",
-	'P': "♙",
-	'k': "♚",
-	'q': "♛",
-	'r': "♜",
-	'b': "♝",
-	'n': "♞",
-	'p': "♟",
-}
 
 func gamePageCommonRows(m model) []string {
 	return []string{
@@ -112,32 +99,22 @@ func parseBoardFEN(fen string) [8][8]rune {
 }
 
 func boardGlyph(piece rune) string {
-	if glyph, ok := fenPieceToGlyph[piece]; ok {
-		return glyph
+	if piece == 0 || piece == ' ' {
+		return " "
 	}
-	return " "
+	return string(piece)
 }
 
 func renderBoardFromFEN(fen string, flipped bool) string {
 	board := parseBoardFEN(fen)
-	lightSquare := lipgloss.NewStyle().
-		Width(3).
-		Align(lipgloss.Center).
-		Background(lipgloss.Color("252")).
-		Foreground(lipgloss.Color("0"))
-	darkSquare := lipgloss.NewStyle().
-		Width(3).
-		Align(lipgloss.Center).
-		Background(lipgloss.Color("240")).
-		Foreground(lipgloss.Color("15"))
-	fileLabel := lipgloss.NewStyle().
-		Width(3).
-		Align(lipgloss.Center).
-		Foreground(lipgloss.Color("245"))
-	rankLabel := lipgloss.NewStyle().
-		Width(2).
-		Align(lipgloss.Center).
-		Foreground(lipgloss.Color("245"))
+
+	cellStyle := lipgloss.NewStyle().
+		Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240"))
+	fileLabel := lipgloss.NewStyle().Width(5).Align(lipgloss.Center)
+
+	rankLabel := lipgloss.NewStyle().Width(3).Align(lipgloss.Center)
 
 	files := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	if flipped {
@@ -149,8 +126,9 @@ func renderBoardFromFEN(fen string, flipped bool) string {
 		header = append(header, fileLabel.Render(file))
 	}
 	header = append(header, rankLabel.Render(""))
+	headerLine := lipgloss.JoinHorizontal(lipgloss.Top, header...)
 
-	rows := []string{lipgloss.JoinHorizontal(lipgloss.Left, header...)}
+	rows := []string{headerLine}
 	for displayRow := 0; displayRow < 8; displayRow++ {
 		sourceRow := displayRow
 		rank := 8 - displayRow
@@ -165,18 +143,13 @@ func renderBoardFromFEN(fen string, flipped bool) string {
 			if flipped {
 				sourceCol = 7 - displayCol
 			}
-
-			squareStyle := lightSquare
-			if (sourceRow+sourceCol)%2 == 1 {
-				squareStyle = darkSquare
-			}
-			cells = append(cells, squareStyle.Render(boardGlyph(board[sourceRow][sourceCol])))
+			cells = append(cells, cellStyle.Render(boardGlyph(board[sourceRow][sourceCol])))
 		}
 		cells = append(cells, rankLabel.Render(strconv.Itoa(rank)))
-		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Left, cells...))
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Center, cells...))
 	}
 
-	rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Left, header...))
+	rows = append(rows, headerLine)
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
@@ -201,50 +174,68 @@ func gameTurnLine(game *managers.Game, fingerprint string) string {
 	return "You are " + colorName + ". " + game.Turn().Name() + " to move."
 }
 
+// UpdateGame is the entry point for the game page. It first handles
+// page-scoped messages (opponent joined / opponent moved) and then routes
+// to a state-specific handler based on whether the player has a game and
+// what state that game is in. Each sub-handler can assume the invariants
+// for its state, so we don't have to defensively re-check them.
 func (m model) UpdateGame(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
+	case opponentJoinedGameMsg:
+		m.currentGame = gameManager.GameForPlayer(m.fingerPrint)
+		opponent := msg.opponentName
+		if opponent == "" {
+			opponent = "Opponent"
+		}
+		m.gameNotice = opponent + " joined. Game on."
+		return m, nil
+	case gameUpdatedMsg:
+		m.currentGame = gameManager.GameForPlayer(m.fingerPrint)
+		if msg.move != "" {
+			m.gameNotice = "Opponent played " + msg.move + "."
+		}
+		return m, nil
+	}
+
+	if m.currentGame == nil {
+		return m.updateGameLobby(msg)
+	}
+	switch m.currentGame.Status() {
+	case managers.GameStatusWaiting:
+		return m.updateGameWaiting(msg)
+	case managers.GameStatusInProgress:
+		return m.updateGameInProgress(msg)
+	case managers.GameStatusFinished:
+		return m.updateGameFinished(msg)
+	}
+	return m, nil
+}
+
+// updateGameLobby handles input when the player is on the game page but
+// not yet in a game: create, join random, or join by ID.
+func (m model) updateGameLobby(msg tea.Msg) (model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
 		case "esc":
 			m = m.navigateTo(PageChat)
 			return m, nil
 		case "ctrl+n":
-			if m.player == nil {
-				m = m.navigateTo(PageIntro)
-				return m, nil
-			}
-			if m.currentGame != nil {
-				m.gameNotice = "You are already in a game."
-				return m, nil
-			}
-
 			gameID, err := gameManager.CreateGame(m.fingerPrint)
 			if err != nil {
 				m.gameNotice = err.Error()
 				return m, nil
 			}
-
 			m.currentGame = gameManager.GameForPlayer(m.fingerPrint)
 			m.gameJoinInput.SetValue("")
 			m.moveInput.SetValue("")
 			m.gameNotice = "Created game " + gameID + ". Share the ID with your opponent."
 			return m, nil
 		case "ctrl+r":
-			if m.player == nil {
-				m = m.navigateTo(PageIntro)
-				return m, nil
-			}
-			if m.currentGame != nil {
-				m.gameNotice = "You are already in a game."
-				return m, nil
-			}
-
 			gameID, err := gameManager.JoinRandomGame(m.fingerPrint)
 			if err != nil {
 				m.gameNotice = err.Error()
 				return m, nil
 			}
-
 			m.currentGame = gameManager.GameForPlayer(m.fingerPrint)
 			m.gameJoinInput.SetValue("")
 			m.moveInput.SetValue("")
@@ -252,43 +243,14 @@ func (m model) UpdateGame(msg tea.Msg) (model, tea.Cmd) {
 			notifyOpponentJoined(gameID, m.fingerPrint)
 			return m, nil
 		case "enter":
-			if m.player == nil {
-				m = m.navigateTo(PageIntro)
-				return m, nil
-			}
-			if m.currentGame != nil && m.currentGame.Status() == managers.GameStatusInProgress {
-				move := strings.ToLower(strings.TrimSpace(m.moveInput.Value()))
-				if move == "" {
-					return m, nil
-				}
-
-				game, err := gameManager.MakeMove(m.fingerPrint, move)
-				if err != nil {
-					m.gameNotice = "Move rejected: " + err.Error()
-					return m, nil
-				}
-
-				m.currentGame = game
-				m.moveInput.SetValue("")
-				m.gameNotice = "Played " + move + "."
-				notifyOpponentMoved(game.ID(), m.fingerPrint, move)
-				return m, nil
-			}
-			if m.currentGame != nil {
-				return m, nil
-			}
-
 			gameID := strings.TrimSpace(m.gameJoinInput.Value())
 			if gameID == "" {
 				return m, nil
 			}
-
-			_, err := gameManager.JoinGame(m.fingerPrint, gameID)
-			if err != nil {
+			if _, err := gameManager.JoinGame(m.fingerPrint, gameID); err != nil {
 				m.gameNotice = err.Error()
 				return m, nil
 			}
-
 			m.currentGame = gameManager.GameForPlayer(m.fingerPrint)
 			m.gameJoinInput.SetValue("")
 			m.moveInput.SetValue("")
@@ -299,13 +261,54 @@ func (m model) UpdateGame(msg tea.Msg) (model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	if m.currentGame == nil {
-		m.gameJoinInput, cmd = m.gameJoinInput.Update(msg)
-		return m, cmd
+	m.gameJoinInput, cmd = m.gameJoinInput.Update(msg)
+	return m, cmd
+}
+
+// updateGameWaiting handles input while waiting for an opponent to join.
+// Nothing to do here besides letting the player back out.
+func (m model) updateGameWaiting(msg tea.Msg) (model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
+		m = m.navigateTo(PageChat)
 	}
-	if m.currentGame.Status() == managers.GameStatusInProgress {
-		m.moveInput, cmd = m.moveInput.Update(msg)
-		return m, cmd
+	return m, nil
+}
+
+// updateGameInProgress handles input during an active game: typing /
+// submitting a move via the move input.
+func (m model) updateGameInProgress(msg tea.Msg) (model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc":
+			m = m.navigateTo(PageChat)
+			return m, nil
+		case "enter":
+			move := strings.ToLower(strings.TrimSpace(m.moveInput.Value()))
+			if move == "" {
+				return m, nil
+			}
+			game, err := gameManager.MakeMove(m.fingerPrint, move)
+			if err != nil {
+				m.gameNotice = "Move rejected: " + err.Error()
+				return m, nil
+			}
+			m.currentGame = game
+			m.moveInput.SetValue("")
+			m.gameNotice = "Played " + move + "."
+			notifyOpponentMoved(game.ID(), m.fingerPrint, move)
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.moveInput, cmd = m.moveInput.Update(msg)
+	return m, cmd
+}
+
+// updateGameFinished handles input after the game ended.
+func (m model) updateGameFinished(msg tea.Msg) (model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
+		m = m.navigateTo(PageChat)
 	}
 	return m, nil
 }
@@ -322,36 +325,56 @@ func (m model) getGameBoard() string {
 
 func (m model) ViewGame() string {
 	if m.currentGame == nil {
-		rows := gamePageCommonRows(m)
-		if m.gameNotice != "" {
-			rows = append(rows, "", m.gameNotice)
-		}
-		rows = append(rows, "", gameNoGame)
-		return lipgloss.JoinVertical(lipgloss.Left, rows...)
+		return m.viewGameLobby()
 	}
+	switch m.currentGame.Status() {
+	case managers.GameStatusWaiting:
+		return m.viewGameWaiting()
+	case managers.GameStatusInProgress:
+		return m.viewGameInProgress()
+	case managers.GameStatusFinished:
+		return m.viewGameFinished()
+	}
+	return ""
+}
 
-	status := m.currentGame.Status()
+func (m model) viewGameLobby() string {
+	rows := gamePageCommonRows(m)
+	if m.gameNotice != "" {
+		rows = append(rows, "", m.gameNotice)
+	}
+	rows = append(rows, "", gameNoGame)
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+// gameHeaderRows is the shared header used by all in-game views.
+func (m model) gameHeaderRows() []string {
 	rows := []string{
 		gamePageTitle,
 		"",
 		"Game ID: " + m.currentGame.ID(),
-		gameStatusLine(status),
+		gameStatusLine(m.currentGame.Status()),
 	}
-
 	if turnLine := gameTurnLine(m.currentGame, m.fingerPrint); turnLine != "" {
 		rows = append(rows, turnLine)
 	}
 	if m.gameNotice != "" {
 		rows = append(rows, m.gameNotice)
 	}
+	return rows
+}
 
-	rows = append(rows, "", m.getGameBoard())
-	if status == managers.GameStatusWaiting {
-		rows = append(rows, "", "Waiting for an opponent. Share the game ID above.")
-	}
-	if status == managers.GameStatusInProgress {
-		rows = append(rows, "", gameHelpMove, m.moveInput.View())
-	}
+func (m model) viewGameWaiting() string {
+	rows := append(m.gameHeaderRows(), "", m.getGameBoard(), "", "Waiting for an opponent. Share the game ID above.")
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
 
+func (m model) viewGameInProgress() string {
+	rows := append(m.gameHeaderRows(), "", m.getGameBoard(), "", gameHelpMove, m.moveInput.View())
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+func (m model) viewGameFinished() string {
+	rows := append(m.gameHeaderRows(), "", m.getGameBoard())
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }

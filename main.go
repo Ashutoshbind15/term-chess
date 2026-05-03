@@ -100,7 +100,9 @@ type message struct {
 	content string
 }
 
-type opponentJoinedGameMsg struct{}
+type opponentJoinedGameMsg struct {
+	opponentName string
+}
 
 type gameUpdatedMsg struct {
 	move string
@@ -170,21 +172,6 @@ func (m model) closePageSelect() model {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// for updating game state for the opponent
-	// program in real-time
-	if _, ok := msg.(opponentJoinedGameMsg); ok {
-		m.currentGame = gameManager.GameForPlayer(m.fingerPrint)
-		if m.currentGame != nil && m.currentGame.Status() == managers.GameStatusInProgress {
-			m.gameNotice = "Opponent joined. Game on."
-		}
-	}
-	if msg, ok := msg.(gameUpdatedMsg); ok {
-		m.currentGame = gameManager.GameForPlayer(m.fingerPrint)
-		if msg.move != "" {
-			m.gameNotice = "Opponent played " + msg.move + "."
-		}
-	}
-
 	// Handle global commands
 	switch msg := msg.(type) {
 	case tea.KeyMsg:

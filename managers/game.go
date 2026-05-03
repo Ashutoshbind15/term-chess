@@ -273,6 +273,14 @@ func (gm *GameManager) MakeMove(fingerprint string, move string) (*Game, error) 
 	return game, nil
 }
 
+func (gm *GameManager) PlayerUsername(fingerprint string) string {
+	player := gm.players[fingerprint]
+	if player == nil {
+		return ""
+	}
+	return player.username
+}
+
 func (gm *GameManager) GameForPlayer(fingerprint string) *Game {
 	player := gm.players[fingerprint]
 	if player == nil || player.currentGameId == "" {
