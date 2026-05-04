@@ -14,6 +14,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -133,6 +134,13 @@ type savePlayerMsg struct {
 	err    error
 }
 
+type loadGamesMsg struct {
+	games []common.Game
+	err   error
+}
+
+type gamesRefreshMsg struct{}
+
 type Page string
 
 const (
@@ -161,6 +169,9 @@ type model struct {
 	introSaving     bool
 	introErr        string
 	usernameSpinner spinner.Model
+	gamesTable      table.Model
+	gamesLoading    bool
+	gamesErr        string
 }
 
 func (m model) Init() tea.Cmd {
@@ -219,6 +230,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m = m.openPageSelect()
 			}
 		}
+	case gamesRefreshMsg:
+		if m.player != nil {
+			m.gamesLoading = true
+			m.gamesErr = ""
+			return m, loadGamesCmd(m.fingerPrint)
+		}
+		return m, nil
+	case loadGamesMsg:
+		m.gamesLoading = false
+		if msg.err != nil {
+			m.gamesErr = msg.err.Error()
+			return m, nil
+		}
+		m.gamesErr = ""
+		m.gamesTable.SetRows(gameRowsFor(m.fingerPrint, msg.games))
+		return m, nil
 	}
 
 	// Route to page-specific update handlers

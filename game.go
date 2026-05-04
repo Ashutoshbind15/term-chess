@@ -17,6 +17,12 @@ func saveGameCmd(record common.Game) tea.Cmd {
 			return nil
 		}
 		gameManager.RemoveGame(record.GameID)
+		// Both players need their intro games table refreshed.
+		for _, fp := range []string{record.WhiteFingerprint, record.BlackFingerprint} {
+			if prog := sessionManager.GetProgram(fp); prog != nil {
+				prog.Send(gamesRefreshMsg{})
+			}
+		}
 		return nil
 	}
 }

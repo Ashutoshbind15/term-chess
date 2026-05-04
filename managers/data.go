@@ -63,3 +63,15 @@ func (dm *DataManager) DeletePlayer(fingerprint string) {
 func (dm *DataManager) AddGame(game common.Game) error {
 	return dm.db.Create(&game).Error
 }
+
+func (dm *DataManager) GetGamesForPlayer(fingerprint string) ([]common.Game, error) {
+	var games []common.Game
+	result := dm.db.
+		Where("white_fingerprint = ? OR black_fingerprint = ?", fingerprint, fingerprint).
+		Order("created_at DESC").
+		Find(&games)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return games, nil
+}

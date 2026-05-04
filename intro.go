@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/Ashutoshbind15/ssh-chess/common"
+	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -25,6 +26,47 @@ func savePlayerCmd(p common.Player, fingerPrint string) tea.Cmd {
 	}
 }
 
+func loadGamesCmd(fingerPrint string) tea.Cmd {
+	return func() tea.Msg {
+		games, err := dataManager.GetGamesForPlayer(fingerPrint)
+		return loadGamesMsg{games: games, err: err}
+	}
+}
+
+func gameRowsFor(fingerPrint string, games []common.Game) []table.Row {
+	rows := make([]table.Row, 0, len(games))
+	for _, g := range games {
+		var color, opponent string
+		if g.WhiteFingerprint == fingerPrint {
+			color = "white"
+			opponent = g.BlackUsername
+		} else {
+			color = "black"
+			opponent = g.WhiteUsername
+		}
+		if opponent == "" {
+			opponent = "?"
+		}
+		rows = append(rows, table.Row{
+			g.CreatedAt.Format("2006-01-02 15:04"),
+			color,
+			opponent,
+			g.Outcome,
+			g.Method,
+		})
+	}
+	return rows
+}
+
+func startGamesLoad(m model) (model, tea.Cmd) {
+	if m.player == nil {
+		return m, nil
+	}
+	m.gamesLoading = true
+	m.gamesErr = ""
+	return m, tea.Batch(m.usernameSpinner.Tick, loadGamesCmd(m.fingerPrint))
+}
+
 func (m model) ViewIntro() string {
 	lines := []string{"Intro Page"}
 
@@ -40,7 +82,17 @@ func (m model) ViewIntro() string {
 			lines = append(lines, m.usernameSpinner.View()+" saving profile...")
 		}
 	default:
-		lines = append(lines, "Welcome, "+m.player.Username)
+		lines = append(lines, "Welcome, "+m.player.Username, "", "Your games:")
+		switch {
+		case m.gamesLoading:
+			lines = append(lines, m.usernameSpinner.View()+" loading games...")
+		case m.gamesErr != "":
+			lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(m.gamesErr))
+		case len(m.gamesTable.Rows()) == 0:
+			lines = append(lines, lipgloss.NewStyle().Faint(true).Render("No games yet."))
+		default:
+			lines = append(lines, m.gamesTable.View())
+		}
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Center, lines...)
@@ -64,6 +116,9 @@ func (m model) UpdateIntro(msg tea.Msg) (model, tea.Cmd) {
 			if lm.player != nil {
 				gameManager.SetPlayer(m.fingerPrint, lm.player.Username)
 				m.usernameInput.SetValue(lm.player.Username)
+				var loadCmd tea.Cmd
+				m, loadCmd = startGamesLoad(m)
+				return m, tea.Batch(spCmd, loadCmd)
 			}
 			return m, spCmd
 		}
@@ -77,11 +132,24 @@ func (m model) UpdateIntro(msg tea.Msg) (model, tea.Cmd) {
 			}
 			m.introErr = ""
 			m.player = &sm.player
+			var loadCmd tea.Cmd
+			m, loadCmd = startGamesLoad(m)
 			m = m.navigateTo(PageChat)
-			return m, spCmd
+			return m, tea.Batch(spCmd, loadCmd)
 		}
 
 		return m, spCmd
+	}
+
+	if m.player != nil {
+		var tblCmd tea.Cmd
+		m.gamesTable, tblCmd = m.gamesTable.Update(msg)
+
+		if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
+			m = m.navigateTo(PageChat)
+			return m, tblCmd
+		}
+		return m, tblCmd
 	}
 
 	var cmd tea.Cmd
@@ -93,10 +161,6 @@ func (m model) UpdateIntro(msg tea.Msg) (model, tea.Cmd) {
 			m.introErr = ""
 		}
 		switch msg.String() {
-		case "esc":
-			if m.player != nil {
-				m = m.navigateTo(PageChat)
-			}
 		case "enter":
 			username := strings.TrimSpace(m.usernameInput.Value())
 			if m.player == nil && username != "" {
