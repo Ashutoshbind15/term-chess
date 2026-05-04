@@ -32,7 +32,7 @@ func (dm *DataManager) Init() {
 		panic(fmt.Sprintf("failed to connect database: %v", err))
 	}
 
-	if err := db.AutoMigrate(&common.Player{}); err != nil {
+	if err := db.AutoMigrate(&common.Player{}, &common.Game{}); err != nil {
 		panic(err)
 	}
 
@@ -58,4 +58,8 @@ func (dm *DataManager) AddPlayer(player common.Player) error {
 
 func (dm *DataManager) DeletePlayer(fingerprint string) {
 	dm.db.Delete(&common.Player{}, "fingerprint = ?", fingerprint)
+}
+
+func (dm *DataManager) AddGame(game common.Game) error {
+	return dm.db.Create(&game).Error
 }

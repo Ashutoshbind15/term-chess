@@ -4,11 +4,22 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Ashutoshbind15/ssh-chess/common"
 	"github.com/Ashutoshbind15/ssh-chess/managers"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/notnil/chess"
 )
+
+func saveGameCmd(record common.Game) tea.Cmd {
+	return func() tea.Msg {
+		if err := dataManager.AddGame(record); err != nil {
+			return nil
+		}
+		gameManager.RemoveGame(record.GameID)
+		return nil
+	}
+}
 
 func notifyOpponentJoined(gameID string, joinerFingerprint string) {
 	opp := gameManager.OpponentFingerprint(gameID, joinerFingerprint)
@@ -296,7 +307,12 @@ func (m model) updateGameInProgress(msg tea.Msg) (model, tea.Cmd) {
 			m.moveInput.SetValue("")
 			m.gameNotice = "Played " + move + "."
 			notifyOpponentMoved(game.ID(), m.fingerPrint, move)
-			return m, nil
+
+			var saveCmd tea.Cmd
+			if game.Status() == managers.GameStatusFinished {
+				saveCmd = saveGameCmd(gameManager.BuildGameRecord(game.ID()))
+			}
+			return m, saveCmd
 		}
 	}
 

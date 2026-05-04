@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 
+	"github.com/Ashutoshbind15/ssh-chess/common"
 	"github.com/google/uuid"
 	"github.com/notnil/chess"
 )
@@ -287,6 +288,30 @@ func (gm *GameManager) GameForPlayer(fingerprint string) *Game {
 		return nil
 	}
 	return gm.games[player.currentGameId]
+}
+
+func (gm *GameManager) BuildGameRecord(gameID string) common.Game {
+	game := gm.games[gameID]
+	return common.Game{
+		GameID:           game.id,
+		WhiteFingerprint: game.whitePlayer.fingerprint,
+		WhiteUsername:    game.whitePlayer.username,
+		BlackFingerprint: game.blackPlayer.fingerprint,
+		BlackUsername:    game.blackPlayer.username,
+		PGN:              game.game.String(),
+		Outcome:          string(game.game.Outcome()),
+		Method:           game.game.Method().String(),
+	}
+}
+
+// RemoveGame drops a game from the in-memory map and clears the
+// currentGameId on both players so the Game object can be GC'd. Must only
+// be called after the game has been durably persisted.
+func (gm *GameManager) RemoveGame(gameID string) {
+	game := gm.games[gameID]
+	game.whitePlayer.currentGameId = ""
+	game.blackPlayer.currentGameId = ""
+	delete(gm.games, gameID)
 }
 
 func (gm *GameManager) OpponentFingerprint(gameID string, fingerprint string) string {
