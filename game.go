@@ -115,11 +115,39 @@ func parseBoardFEN(fen string) [8][8]rune {
 	return board
 }
 
+// Unicode chess symbols for the board
 func boardGlyph(piece rune) string {
 	if piece == 0 || piece == ' ' {
 		return " "
 	}
-	return string(piece)
+	switch piece {
+	case 'K':
+		return "\u2654"
+	case 'Q':
+		return "\u2655"
+	case 'R':
+		return "\u2656"
+	case 'B':
+		return "\u2657"
+	case 'N':
+		return "\u2658"
+	case 'P':
+		return "\u2659"
+	case 'k':
+		return "\u265a"
+	case 'q':
+		return "\u265b"
+	case 'r':
+		return "\u265c"
+	case 'b':
+		return "\u265d"
+	case 'n':
+		return "\u265e"
+	case 'p':
+		return "\u265f"
+	default:
+		return string(piece)
+	}
 }
 
 func renderBoardFromFEN(fen string, flipped bool, r *lipgloss.Renderer) string {
