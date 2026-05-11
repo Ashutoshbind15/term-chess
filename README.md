@@ -2,6 +2,12 @@
 
 Term Chess is an SSH-native terminal chess server built in Go. Players connect over SSH, land directly inside a Bubble Tea interface, create time-controlled multiplayer games, chat in the lobby, or play untimed bot matches backed by [`elo-based-rec`](https://github.com/Ashutoshbind15/elo-based-rec).
 
+
+
+https://github.com/user-attachments/assets/fa54412a-5fb7-4ed3-9b15-69c7f5b00817
+
+
+
 ## Features
 
 - SSH-hosted terminal UI built with `Wish` + `Bubble Tea`
