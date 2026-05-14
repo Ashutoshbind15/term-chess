@@ -329,13 +329,13 @@ func (m gameModel) Update(msg tea.Msg) (gameModel, tea.Cmd) {
 			m.gameNotice = "Opponent played " + msg.move + "."
 		}
 		return m, nil
-	case managers.ClockUpdateMsg:
+	case ClockUpdateMsg:
 		if m.currentGame != nil && m.currentGame.ID() == msg.GameID {
 			m.whiteTimeLeft = msg.WhiteTime
 			m.blackTimeLeft = msg.BlackTime
 		}
 		return m, nil
-	case managers.TimeForfeitMsg:
+	case TimeForfeitMsg:
 		if m.currentGame == nil || m.currentGame.ID() != msg.GameID {
 			return m, nil
 		}

@@ -84,6 +84,21 @@ func (g *Game) TimeControl() TimeControl {
 	return g.timeControl
 }
 
+// Fingerprints returns the white and black player fingerprints. Either may
+// be empty while a game is still in GameStatusWaiting.
+func (g *Game) Fingerprints() (white, black string) {
+	if g == nil {
+		return "", ""
+	}
+	if g.whitePlayer != nil {
+		white = g.whitePlayer.fingerprint
+	}
+	if g.blackPlayer != nil {
+		black = g.blackPlayer.fingerprint
+	}
+	return white, black
+}
+
 func (g *Game) PlayerColor(fingerprint string) chess.Color {
 	if g == nil {
 		return chess.NoColor

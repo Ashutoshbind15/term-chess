@@ -9,7 +9,6 @@ import (
 	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/Ashutoshbind15/ssh-chess/common"
-	"github.com/Ashutoshbind15/ssh-chess/managers"
 )
 
 // Context holds state that every page model needs to read or share. Models
@@ -145,7 +144,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.activateCurrentPage()
 			}
 		}
-	case opponentJoinedGameMsg, gameUpdatedMsg, managers.ClockUpdateMsg, managers.TimeForfeitMsg:
+	case opponentJoinedGameMsg, gameUpdatedMsg, ClockUpdateMsg, TimeForfeitMsg:
 		var cmd tea.Cmd
 		m.game, cmd = m.game.Update(msg)
 		return m, cmd

@@ -44,7 +44,6 @@ func sshListenHost() string {
 var sessionManager *SessionManager
 var dataManager *managers.DataManager
 var gameManager *managers.GameManager
-var clockManager *managers.ClockManager
 var botGameManager *managers.BotGameManager
 var botAPIManager *managers.BotAPIManager
 
@@ -54,10 +53,12 @@ func main() {
 	sessionManager = NewSessionManager()
 	dataManager = managers.NewDataManager()
 	gameManager = managers.NewGameManager()
-	clockManager = managers.NewClockManager(gameManager, dataManager, sessionManager)
 	botGameManager = managers.NewBotGameManager()
 	botAPIManager = managers.NewBotAPIManager()
-	go clockManager.Start()
+
+	clockStop := make(chan struct{})
+	defer close(clockStop)
+	go runClockTicker(clockStop)
 
 	s, err := wish.NewServer(
 		wish.WithAddress(net.JoinHostPort(host, port)),
