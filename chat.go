@@ -1,26 +1,44 @@
 package main
 
 import (
+	"github.com/Ashutoshbind15/ssh-chess/common"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
+type chatModel struct {
+	ctx          *Context
+	chatTextarea textarea.Model
+	messages     []message
+}
+
+func newChatModel(ctx *Context) chatModel {
+	ta := common.InitTextArea()
+	applyRendererTextareaStyles(&ta, ctx.renderer)
+	return chatModel{ctx: ctx, chatTextarea: ta}
+}
+
+func (m chatModel) Init() tea.Cmd { return nil }
+
+func (m chatModel) Activate() (chatModel, tea.Cmd) {
+	return m, m.chatTextarea.Focus()
+}
+
 // UpdateChat handles chat-specific update logic
-func (m model) UpdateChat(msg tea.Msg) (model, tea.Cmd) {
+func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	var tiCmd tea.Cmd
 	m.chatTextarea, tiCmd = m.chatTextarea.Update(msg)
 	var rescmds []tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "enter":
-			if m.player == nil {
+		if msg.String() == "enter" {
+			if m.ctx.player == nil {
 				return m, tiCmd
 			}
-
-			cmds := sessionManager.SendMessage(m.fingerPrint, message{
-				sender:  m.player.Username,
+			cmds := sessionManager.SendMessage(m.ctx.fingerPrint, message{
+				sender:  m.ctx.player.Username,
 				content: m.chatTextarea.Value(),
 			})
 			rescmds = append(rescmds, cmds...)
@@ -35,25 +53,26 @@ func (m model) UpdateChat(msg tea.Msg) (model, tea.Cmd) {
 }
 
 // ViewChat renders the chat view
-func (m model) ViewChat() string {
-	titleStyle := m.renderer.NewStyle().
+func (m chatModel) View() string {
+	r := m.ctx.renderer
+
+	titleStyle := r.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("62")).
 		Padding(0, 1).
 		MarginBottom(1)
 
-	senderStyle := m.renderer.NewStyle().
+	senderStyle := r.NewStyle().
 		Foreground(lipgloss.Color("205")).
 		Bold(true)
 
-	msgStyle := m.renderer.NewStyle().
+	msgStyle := r.NewStyle().
 		Foreground(lipgloss.Color("252"))
 
-	var rows []string
-	rows = append(rows, titleStyle.Render("Lobby Chat"))
+	rows := []string{titleStyle.Render("Lobby Chat")}
 
 	if len(m.messages) == 0 {
-		rows = append(rows, m.renderer.NewStyle().Faint(true).Render("No messages yet. Be the first to say hi!"))
+		rows = append(rows, r.NewStyle().Faint(true).Render("No messages yet. Be the first to say hi!"))
 	} else {
 		for _, msg := range m.messages {
 			sender := senderStyle.Render(msg.sender + ":")
@@ -62,8 +81,6 @@ func (m model) ViewChat() string {
 		}
 	}
 
-	rows = append(rows, "")
-	rows = append(rows, m.chatTextarea.View())
-
+	rows = append(rows, "", m.chatTextarea.View())
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }

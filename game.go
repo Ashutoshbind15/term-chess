@@ -6,11 +6,73 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ashutoshbind15/ssh-chess/common"
 	"github.com/Ashutoshbind15/ssh-chess/managers"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/notnil/chess"
 )
+
+const (
+	gamePageTitle      = "Game Page"
+	gameHelpCreate     = "Create a game: ctrl+n"
+	gameHelpJoinRandom = "Join a random game: ctrl+r"
+	gameHelpJoinByID   = "Join by ID: type the game ID below and press enter"
+	gameHelpMove       = "Make a move: click a piece then a square, or type UCI like e2e4"
+	gameNoGame         = "No game"
+	gameHelpTimeSelect = "Select time: [1] 1 min  [3] 3 min  [5] 5 min"
+)
+
+type gameModel struct {
+	ctx *Context
+
+	gameJoinInput textinput.Model
+	moveInput     textinput.Model
+
+	currentGame         *managers.Game
+	gameNotice          string
+	selectedTimeControl TimeControlChoice
+	whiteTimeLeft       time.Duration
+	blackTimeLeft       time.Duration
+	selected            string
+	possibleMoves       []string
+}
+
+func newGameModel(ctx *Context) gameModel {
+	gameJoinInput := common.InitTextInput()
+	applyRendererTextInputStyles(&gameJoinInput, ctx.renderer)
+	gameJoinInput.Prompt = "game id> "
+	gameJoinInput.Placeholder = "abc123"
+	gameJoinInput.Width = textInputViewWidth
+
+	moveInput := common.InitTextInput()
+	applyRendererTextInputStyles(&moveInput, ctx.renderer)
+	moveInput.Prompt = "move> "
+	moveInput.Placeholder = "e2e4"
+	moveInput.Width = textInputViewWidth
+
+	return gameModel{
+		ctx:                 ctx,
+		gameJoinInput:       gameJoinInput,
+		moveInput:           moveInput,
+		currentGame:         gameManager.GameForPlayer(ctx.fingerPrint),
+		selectedTimeControl: NoTimeControl,
+	}
+}
+
+func (m gameModel) Init() tea.Cmd { return nil }
+
+func (m gameModel) Activate() (gameModel, tea.Cmd) {
+	if m.currentGame == nil {
+		return m, m.gameJoinInput.Focus()
+	}
+	if m.currentGame.Status() == managers.GameStatusInProgress {
+		return m, m.moveInput.Focus()
+	}
+	return m, nil
+}
 
 func notifyOpponentJoined(gameID string, joinerFingerprint string) {
 	opp := gameManager.OpponentFingerprint(gameID, joinerFingerprint)
@@ -47,15 +109,13 @@ func persistAndRemoveGame(gameID string) {
 	}
 }
 
-const (
-	gamePageTitle      = "Game Page"
-	gameHelpCreate     = "Create a game: ctrl+n"
-	gameHelpJoinRandom = "Join a random game: ctrl+r"
-	gameHelpJoinByID   = "Join by ID: type the game ID below and press enter"
-	gameHelpMove       = "Make a move: click a piece then a square, or type UCI like e2e4"
-	gameNoGame         = "No game"
-	gameHelpTimeSelect = "Select time: [1] 1 min  [3] 3 min  [5] 5 min"
-)
+func gamesRefreshCmd() tea.Cmd {
+	return func() tea.Msg { return gamesRefreshMsg{} }
+}
+
+func navigateToChatCmdGame() tea.Cmd {
+	return func() tea.Msg { return navigateMsg{page: PageChat} }
+}
 
 func formatDuration(d time.Duration) string {
 	if d < 0 {
@@ -64,9 +124,6 @@ func formatDuration(d time.Duration) string {
 	totalSeconds := int(d.Seconds())
 	minutes := totalSeconds / 60
 	seconds := totalSeconds % 60
-	if d < time.Minute {
-		return fmt.Sprintf("%d:%02d", minutes, seconds)
-	}
 	return fmt.Sprintf("%d:%02d", minutes, seconds)
 }
 
@@ -78,29 +135,6 @@ func formatClock(whiteTime, blackTime time.Duration, playerColor chess.Color) st
 		return "Time | You: " + whiteStr + "  Opp: " + blackStr
 	}
 	return "Time | You: " + blackStr + "  Opp: " + whiteStr
-}
-
-func gamePageCommonRows(m model) []string {
-	titleStyle := m.renderer.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("62")).
-		Padding(0, 1)
-
-	helpStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("241"))
-	highlightStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
-	infoStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("252"))
-
-	rows := []string{
-		titleStyle.Render(gamePageTitle),
-		"",
-	}
-	if m.selectedTimeControl == NoTimeControl {
-		rows = append(rows, helpStyle.Render(gameHelpTimeSelect))
-	} else {
-		rows = append(rows, infoStyle.Render("Time control: ")+highlightStyle.Render(strconv.Itoa(int(m.selectedTimeControl))+" min")+helpStyle.Render("  (press 1/3/5 to change)"))
-	}
-	rows = append(rows, "", helpStyle.Render(gameHelpCreate), helpStyle.Render(gameHelpJoinRandom), helpStyle.Render(gameHelpJoinByID), "", m.gameJoinInput.View())
-	return rows
 }
 
 func gameStatusLine(status string) string {
@@ -153,35 +187,6 @@ func parseBoardFENToString(fen string) [8][8]string {
 	return board
 }
 
-func parseBoardFEN(fen string) [8][8]rune {
-	var board [8][8]rune
-	fields := strings.Fields(fen)
-	if len(fields) == 0 {
-		return board
-	}
-
-	rows := strings.Split(fields[0], "/")
-	for rowIndex, row := range rows {
-		fileIndex := 0
-		for _, square := range row {
-			if square >= '1' && square <= '8' {
-				emptySquares := int(square - '0')
-				for i := 0; i < emptySquares && fileIndex < 8; i++ {
-					board[rowIndex][fileIndex] = ' '
-					fileIndex++
-				}
-				continue
-			}
-			if fileIndex < 8 {
-				board[rowIndex][fileIndex] = square
-				fileIndex++
-			}
-		}
-	}
-
-	return board
-}
-
 // Unicode chess symbols for the board
 func boardGlyph(piece rune) string {
 	if piece == 0 || piece == ' ' {
@@ -221,11 +226,11 @@ func boardGlyph(piece rune) string {
 // markers so clicks can be mapped back to algebraic squares. It is shared
 // between the multiplayer and bot pages so the zone layout is guaranteed
 // to be identical for both.
-func (m model) renderChessBoard(fen string, colorIsWhite bool) string {
+func renderChessBoard(r *lipgloss.Renderer, z *zone.Manager, fen string, colorIsWhite bool, selected string, possibleMoves []string) string {
 	board := parseBoardFENToString(fen)
 	flipped := !colorIsWhite
 
-	cellStyle := m.renderer.NewStyle().
+	cellStyle := r.NewStyle().
 		Padding(0, 1).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("240"))
@@ -248,15 +253,15 @@ func (m model) renderChessBoard(fen string, colorIsWhite bool) string {
 			glyph := boardGlyph(rune(board[sourceRow][sourceCol][0]))
 
 			var cell string
-			if m.selected == pos {
+			if selected == pos {
 				cell = cellStyle.Copy().BorderForeground(lipgloss.Color("190")).Render(glyph)
-			} else if containsSquare(m.possibleMoves, pos) {
+			} else if containsSquare(possibleMoves, pos) {
 				cell = cellStyle.Copy().BorderForeground(lipgloss.Color("229")).Render(glyph)
 			} else {
 				cell = cellStyle.Render(glyph)
 			}
 
-			cells[j] = m.zone.Mark(pos, cell)
+			cells[j] = z.Mark(pos, cell)
 		}
 		rows[i] = lipgloss.JoinHorizontal(lipgloss.Left, cells...)
 	}
@@ -264,10 +269,10 @@ func (m model) renderChessBoard(fen string, colorIsWhite bool) string {
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-func (m model) renderBoardFromFEN() string {
+func (m gameModel) renderBoardFromFEN() string {
 	fen := m.currentGame.Game().FEN()
-	colorIsWhite := m.currentGame.PlayerColor(m.fingerPrint) != chess.Black
-	return m.renderChessBoard(fen, colorIsWhite)
+	colorIsWhite := m.currentGame.PlayerColor(m.ctx.fingerPrint) != chess.Black
+	return renderChessBoard(m.ctx.renderer, m.ctx.zone, fen, colorIsWhite, m.selected, m.possibleMoves)
 }
 
 func containsSquare(squares []string, target string) bool {
@@ -300,16 +305,16 @@ func gameTurnLine(game *managers.Game, fingerprint string) string {
 	return "You are " + colorName + ". " + game.Turn().Name() + " to move."
 }
 
-// UpdateGame is the entry point for the game page. It first handles
+// Update is the entry point for the game page. It first handles
 // page-scoped messages (opponent joined / opponent moved, clock ticks,
 // time forfeit) and then routes to a state-specific handler based on whether
 // the player has a game and what state that game is in. Each sub-handler can
 // assume the invariants for its state, so we don't have to defensively
 // re-check them.
-func (m model) UpdateGame(msg tea.Msg) (model, tea.Cmd) {
+func (m gameModel) Update(msg tea.Msg) (gameModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case opponentJoinedGameMsg:
-		m.currentGame = gameManager.GameForPlayer(m.fingerPrint)
+		m.currentGame = gameManager.GameForPlayer(m.ctx.fingerPrint)
 		opponent := msg.opponentName
 		if opponent == "" {
 			opponent = "Opponent"
@@ -339,8 +344,7 @@ func (m model) UpdateGame(msg tea.Msg) (model, tea.Cmd) {
 		} else {
 			m.gameNotice = "Black ran out of time. White wins!"
 		}
-		m.gamesLoading = true
-		return m, loadGamesCmd(m.fingerPrint)
+		return m, gamesRefreshCmd()
 	}
 
 	if m.currentGame == nil {
@@ -359,12 +363,11 @@ func (m model) UpdateGame(msg tea.Msg) (model, tea.Cmd) {
 
 // updateGameLobby handles input when the player is on the game page but
 // not yet in a game: pick a time control, then create, join random, or join by ID.
-func (m model) updateGameLobby(msg tea.Msg) (model, tea.Cmd) {
+func (m gameModel) updateGameLobby(msg tea.Msg) (gameModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "esc":
-			m = m.navigateTo(PageChat)
-			return m, m.chatTextarea.Focus()
+			return m, navigateToChatCmdGame()
 		case "1":
 			m.selectedTimeControl = TimeControl1
 			return m, nil
@@ -379,12 +382,12 @@ func (m model) updateGameLobby(msg tea.Msg) (model, tea.Cmd) {
 				m.gameNotice = "Select a time control first (1, 3, or 5)."
 				return m, nil
 			}
-			gameID, err := gameManager.CreateGame(m.fingerPrint, m.selectedTimeControl.ToGameTimeControl())
+			gameID, err := gameManager.CreateGame(m.ctx.fingerPrint, m.selectedTimeControl.ToGameTimeControl())
 			if err != nil {
 				m.gameNotice = err.Error()
 				return m, nil
 			}
-			m.currentGame = gameManager.GameForPlayer(m.fingerPrint)
+			m.currentGame = gameManager.GameForPlayer(m.ctx.fingerPrint)
 			m.gameJoinInput.SetValue("")
 			m.moveInput.SetValue("")
 			m.gameNotice = "Created " + m.selectedTimeControl.ToGameTimeControl().String() + " game " + gameID + ". Share the ID with your opponent."
@@ -394,31 +397,31 @@ func (m model) updateGameLobby(msg tea.Msg) (model, tea.Cmd) {
 				m.gameNotice = "Select a time control first (1, 3, or 5)."
 				return m, nil
 			}
-			gameID, err := gameManager.JoinRandomGame(m.fingerPrint, m.selectedTimeControl.ToGameTimeControl())
+			gameID, err := gameManager.JoinRandomGame(m.ctx.fingerPrint, m.selectedTimeControl.ToGameTimeControl())
 			if err != nil {
 				m.gameNotice = err.Error()
 				return m, nil
 			}
-			m.currentGame = gameManager.GameForPlayer(m.fingerPrint)
+			m.currentGame = gameManager.GameForPlayer(m.ctx.fingerPrint)
 			m.gameJoinInput.SetValue("")
 			m.moveInput.SetValue("")
 			m.gameNotice = "Joined " + m.currentGame.TimeControl().String() + " game " + gameID + "."
-			notifyOpponentJoined(gameID, m.fingerPrint)
+			notifyOpponentJoined(gameID, m.ctx.fingerPrint)
 			return m, m.moveInput.Focus()
 		case "enter":
 			gameID := strings.TrimSpace(m.gameJoinInput.Value())
 			if gameID == "" {
 				return m, nil
 			}
-			if _, err := gameManager.JoinGame(m.fingerPrint, gameID); err != nil {
+			if _, err := gameManager.JoinGame(m.ctx.fingerPrint, gameID); err != nil {
 				m.gameNotice = err.Error()
 				return m, nil
 			}
-			m.currentGame = gameManager.GameForPlayer(m.fingerPrint)
+			m.currentGame = gameManager.GameForPlayer(m.ctx.fingerPrint)
 			m.gameJoinInput.SetValue("")
 			m.moveInput.SetValue("")
 			m.gameNotice = "Joined " + m.currentGame.TimeControl().String() + " game " + gameID + "."
-			notifyOpponentJoined(gameID, m.fingerPrint)
+			notifyOpponentJoined(gameID, m.ctx.fingerPrint)
 			if m.currentGame.Status() == managers.GameStatusInProgress {
 				return m, m.moveInput.Focus()
 			}
@@ -433,17 +436,16 @@ func (m model) updateGameLobby(msg tea.Msg) (model, tea.Cmd) {
 
 // updateGameWaiting handles input while waiting for an opponent to join.
 // Nothing to do here besides letting the player back out.
-func (m model) updateGameWaiting(msg tea.Msg) (model, tea.Cmd) {
+func (m gameModel) updateGameWaiting(msg tea.Msg) (gameModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
-		m = m.navigateTo(PageChat)
-		return m, m.chatTextarea.Focus()
+		return m, navigateToChatCmdGame()
 	}
 	return m, nil
 }
 
 // updateGameInProgress handles input during an active game: typing /
 // submitting a move via the move input, and mouse clicks on the board.
-func (m model) updateGameInProgress(msg tea.Msg) (model, tea.Cmd) {
+func (m gameModel) updateGameInProgress(msg tea.Msg) (gameModel, tea.Cmd) {
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
 		return m.handleBoardMouse(mouseMsg)
 	}
@@ -453,14 +455,13 @@ func (m model) updateGameInProgress(msg tea.Msg) (model, tea.Cmd) {
 		case "esc":
 			m.selected = ""
 			m.possibleMoves = nil
-			m = m.navigateTo(PageChat)
-			return m, m.chatTextarea.Focus()
+			return m, navigateToChatCmdGame()
 		case "enter":
 			move := strings.ToLower(strings.TrimSpace(m.moveInput.Value()))
 			if move == "" {
 				return m, nil
 			}
-			game, err := gameManager.MakeMove(m.fingerPrint, move)
+			game, err := gameManager.MakeMove(m.ctx.fingerPrint, move)
 			if err != nil {
 				m.gameNotice = "Move rejected: " + err.Error()
 				return m, nil
@@ -471,18 +472,17 @@ func (m model) updateGameInProgress(msg tea.Msg) (model, tea.Cmd) {
 
 			if game.Status() == managers.GameStatusFinished {
 				gameID := game.ID()
-				oppFP := gameManager.OpponentFingerprint(gameID, m.fingerPrint)
+				oppFP := gameManager.OpponentFingerprint(gameID, m.ctx.fingerPrint)
 				persistAndRemoveGame(gameID)
 				if oppFP != "" {
 					if prog := sessionManager.GetProgram(oppFP); prog != nil {
 						prog.Send(gameUpdatedMsg{move: move})
 					}
 				}
-				m.gamesLoading = true
-				return m, loadGamesCmd(m.fingerPrint)
+				return m, gamesRefreshCmd()
 			}
 
-			notifyOpponentMoved(game.ID(), m.fingerPrint, move)
+			notifyOpponentMoved(game.ID(), m.ctx.fingerPrint, move)
 			return m, nil
 		}
 	}
@@ -492,24 +492,24 @@ func (m model) updateGameInProgress(msg tea.Msg) (model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) handleBoardMouse(msg tea.MouseMsg) (model, tea.Cmd) {
+func (m gameModel) handleBoardMouse(msg tea.MouseMsg) (gameModel, tea.Cmd) {
 	if msg.Action != tea.MouseActionRelease || msg.Button != tea.MouseButtonLeft {
 		return m, nil
 	}
 
-	if !m.currentGame.IsPlayersTurn(m.fingerPrint) {
+	if !m.currentGame.IsPlayersTurn(m.ctx.fingerPrint) {
 		m.selected = ""
 		m.possibleMoves = nil
 		return m, nil
 	}
 
-	colorIsWhite := m.currentGame.PlayerColor(m.fingerPrint) == chess.White
+	colorIsWhite := m.currentGame.PlayerColor(m.ctx.fingerPrint) == chess.White
 	doesClick := false
 
 	for i := 0; i < 8; i++ {
 		for j := 0; j < 8; j++ {
 			pos := convertToChessboardPosition(j, i, colorIsWhite)
-			if m.zone.Get(pos).InBounds(msg) {
+			if m.ctx.zone.Get(pos).InBounds(msg) {
 				doesClick = true
 
 				if m.selected == "" {
@@ -537,9 +537,9 @@ func (m model) handleBoardMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 					m.possibleMoves = validMovesFromSelected
 				} else {
 					moveUCI := m.selected + pos
-					game, err := gameManager.MakeMove(m.fingerPrint, moveUCI)
+					game, err := gameManager.MakeMove(m.ctx.fingerPrint, moveUCI)
 					if err != nil {
-						game2, perr := gameManager.MakeMove(m.fingerPrint, moveUCI+"q")
+						game2, perr := gameManager.MakeMove(m.ctx.fingerPrint, moveUCI+"q")
 						if perr != nil {
 							m.gameNotice = "Move rejected: " + err.Error()
 						} else {
@@ -559,18 +559,17 @@ func (m model) handleBoardMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 
 					if game.Status() == managers.GameStatusFinished {
 						gameID := game.ID()
-						oppFP := gameManager.OpponentFingerprint(gameID, m.fingerPrint)
+						oppFP := gameManager.OpponentFingerprint(gameID, m.ctx.fingerPrint)
 						persistAndRemoveGame(gameID)
 						if oppFP != "" {
 							if prog := sessionManager.GetProgram(oppFP); prog != nil {
 								prog.Send(gameUpdatedMsg{move: moveUCI})
 							}
 						}
-						m.gamesLoading = true
-						return m, loadGamesCmd(m.fingerPrint)
+						return m, gamesRefreshCmd()
 					}
 
-					notifyOpponentMoved(game.ID(), m.fingerPrint, moveUCI)
+					notifyOpponentMoved(game.ID(), m.ctx.fingerPrint, moveUCI)
 					return m, nil
 				}
 			}
@@ -586,22 +585,21 @@ func (m model) handleBoardMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 }
 
 // updateGameFinished handles input after the game ended.
-func (m model) updateGameFinished(msg tea.Msg) (model, tea.Cmd) {
+func (m gameModel) updateGameFinished(msg tea.Msg) (gameModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
-		m = m.navigateTo(PageChat)
-		return m, m.chatTextarea.Focus()
+		return m, navigateToChatCmdGame()
 	}
 	return m, nil
 }
 
-func (m model) getGameBoard() string {
+func (m gameModel) getGameBoard() string {
 	if m.currentGame != nil && m.currentGame.Game() != nil {
 		return m.renderBoardFromFEN()
 	}
 	return gameNoGame
 }
 
-func (m model) ViewGame() string {
+func (m gameModel) View() string {
 	if m.currentGame == nil {
 		return m.viewGameLobby()
 	}
@@ -616,27 +614,54 @@ func (m model) ViewGame() string {
 	return ""
 }
 
-func (m model) viewGameLobby() string {
-	rows := gamePageCommonRows(m)
+func (m gameModel) gamePageCommonRows() []string {
+	r := m.ctx.renderer
+
+	titleStyle := r.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("62")).
+		Padding(0, 1)
+
+	helpStyle := r.NewStyle().Foreground(lipgloss.Color("241"))
+	highlightStyle := r.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	infoStyle := r.NewStyle().Foreground(lipgloss.Color("252"))
+
+	rows := []string{
+		titleStyle.Render(gamePageTitle),
+		"",
+	}
+	if m.selectedTimeControl == NoTimeControl {
+		rows = append(rows, helpStyle.Render(gameHelpTimeSelect))
+	} else {
+		rows = append(rows, infoStyle.Render("Time control: ")+highlightStyle.Render(strconv.Itoa(int(m.selectedTimeControl))+" min")+helpStyle.Render("  (press 1/3/5 to change)"))
+	}
+	rows = append(rows, "", helpStyle.Render(gameHelpCreate), helpStyle.Render(gameHelpJoinRandom), helpStyle.Render(gameHelpJoinByID), "", m.gameJoinInput.View())
+	return rows
+}
+
+func (m gameModel) viewGameLobby() string {
+	rows := m.gamePageCommonRows()
 	if m.gameNotice != "" {
-		noticeStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Padding(0, 1)
+		noticeStyle := m.ctx.renderer.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Padding(0, 1)
 		rows = append(rows, "", noticeStyle.Render(m.gameNotice))
 	}
-	rows = append(rows, "", m.renderer.NewStyle().Faint(true).Render(gameNoGame))
+	rows = append(rows, "", m.ctx.renderer.NewStyle().Faint(true).Render(gameNoGame))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
 // gameHeaderRows is the shared header used by all in-game views (status,
 // time control, live clocks while in progress, notices).
-func (m model) gameHeaderRows() []string {
-	titleStyle := m.renderer.NewStyle().
+func (m gameModel) gameHeaderRows() []string {
+	r := m.ctx.renderer
+
+	titleStyle := r.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("62")).
 		Padding(0, 1)
 
-	infoStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("252"))
-	highlightStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
-	noticeStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Padding(0, 1)
+	infoStyle := r.NewStyle().Foreground(lipgloss.Color("252"))
+	highlightStyle := r.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	noticeStyle := r.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Padding(0, 1)
 
 	rows := []string{
 		titleStyle.Render(gamePageTitle),
@@ -647,11 +672,11 @@ func (m model) gameHeaderRows() []string {
 	if m.currentGame.TimeControl() != 0 {
 		rows = append(rows, infoStyle.Render("Time control: ")+highlightStyle.Render(m.currentGame.TimeControl().String()))
 	}
-	if turnLine := gameTurnLine(m.currentGame, m.fingerPrint); turnLine != "" {
+	if turnLine := gameTurnLine(m.currentGame, m.ctx.fingerPrint); turnLine != "" {
 		rows = append(rows, highlightStyle.Render(turnLine))
 	}
 	if m.currentGame.Status() == managers.GameStatusInProgress {
-		playerColor := m.currentGame.PlayerColor(m.fingerPrint)
+		playerColor := m.currentGame.PlayerColor(m.ctx.fingerPrint)
 		if playerColor != chess.NoColor {
 			rows = append(rows, infoStyle.Render(formatClock(m.whiteTimeLeft, m.blackTimeLeft, playerColor)))
 		}
@@ -662,19 +687,19 @@ func (m model) gameHeaderRows() []string {
 	return rows
 }
 
-func (m model) viewGameWaiting() string {
-	helpStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("241"))
+func (m gameModel) viewGameWaiting() string {
+	helpStyle := m.ctx.renderer.NewStyle().Foreground(lipgloss.Color("241"))
 	rows := append(m.gameHeaderRows(), "", m.getGameBoard(), "", helpStyle.Render("Waiting for an opponent. Share the game ID above."))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-func (m model) viewGameInProgress() string {
-	helpStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("241"))
+func (m gameModel) viewGameInProgress() string {
+	helpStyle := m.ctx.renderer.NewStyle().Foreground(lipgloss.Color("241"))
 	rows := append(m.gameHeaderRows(), "", m.getGameBoard(), "", helpStyle.Render(gameHelpMove), m.moveInput.View())
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-func (m model) viewGameFinished() string {
+func (m gameModel) viewGameFinished() string {
 	rows := append(m.gameHeaderRows(), "", m.getGameBoard())
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }

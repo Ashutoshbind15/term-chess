@@ -2,10 +2,8 @@ package main
 
 import (
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/Ashutoshbind15/ssh-chess/managers"
+	"github.com/charmbracelet/lipgloss"
 )
 
 const (
@@ -105,42 +103,31 @@ func newPageList(width, height int, r *lipgloss.Renderer) list.Model {
 	return l
 }
 
-func (m model) UpdateSelect(msg tea.Msg) (model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
+type menuModel struct {
+	ctx      *Context
+	pageList list.Model
+}
+
+func newMenuModel(ctx *Context) menuModel {
+	return menuModel{
+		ctx:      ctx,
+		pageList: newPageList(80, 22, ctx.renderer),
+	}
+}
+
+func (m menuModel) Init() tea.Cmd                    { return nil }
+func (m menuModel) Activate() (menuModel, tea.Cmd)   { return m, nil }
+
+func (m menuModel) Update(msg tea.Msg) (menuModel, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
 		case "enter":
 			if it, ok := m.pageList.SelectedItem().(pageMenuItem); ok {
-				m = m.navigateTo(it.page)
-				m.previousPage = nil
-			}
-			switch m.page {
-			case PageIntro:
-				if m.player != nil {
-					return m, nil
-				}
-				return m, m.usernameInput.Focus()
-			case PageChat:
-				return m, m.chatTextarea.Focus()
-			case PageGame:
-				if m.currentGame == nil {
-					return m, m.gameJoinInput.Focus()
-				}
-				if m.currentGame.Status() == managers.GameStatusInProgress {
-					return m, m.moveInput.Focus()
-				}
-				return m, nil
-			case PageBot:
-				if m.currentBotGame == nil {
-					return m, func() tea.Msg { return botGamesRefreshMsg{} }
-				}
-				return m, nil
-			default:
-				return m, nil
+				target := it.page
+				return m, func() tea.Msg { return navigateMsg{page: target} }
 			}
 		case "esc":
-			m = m.closePageSelect()
-			return m, nil
+			return m, func() tea.Msg { return closeMenuMsg{} }
 		}
 	}
 	var cmd tea.Cmd
@@ -148,6 +135,6 @@ func (m model) UpdateSelect(msg tea.Msg) (model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) ViewSelect() string {
+func (m menuModel) View() string {
 	return m.pageList.View()
 }

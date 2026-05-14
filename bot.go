@@ -6,6 +6,7 @@ import (
 
 	"github.com/Ashutoshbind15/ssh-chess/common"
 	"github.com/Ashutoshbind15/ssh-chess/managers"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -34,6 +35,46 @@ type loadBotGamesMsg struct {
 }
 
 type botGamesRefreshMsg struct{}
+
+type botModel struct {
+	ctx *Context
+
+	currentBotGame   *managers.BotGame
+	botGamesTable    table.Model
+	botSelectedLevel int
+	botSelectedColor chess.Color
+	botNotice        string
+	botMoving        bool
+	botSpinner       spinner.Model
+
+	selected      string
+	possibleMoves []string
+
+	botGamesLoading bool
+	botGamesErr     string
+}
+
+func newBotModel(ctx *Context) botModel {
+	return botModel{
+		ctx:           ctx,
+		currentBotGame: botGameManager.GameForPlayer(ctx.fingerPrint),
+		botGamesTable: newBotGamesTable(),
+		botSpinner:    common.InitSpinner(),
+	}
+}
+
+func (m botModel) Init() tea.Cmd { return nil }
+
+func (m botModel) Activate() (botModel, tea.Cmd) {
+	if m.currentBotGame == nil {
+		return m, func() tea.Msg { return botGamesRefreshMsg{} }
+	}
+	return m, nil
+}
+
+func navigateToChatCmdBot() tea.Cmd {
+	return func() tea.Msg { return navigateMsg{page: PageChat} }
+}
 
 func loadBotGamesCmd(fingerprint string) tea.Cmd {
 	return func() tea.Msg {
@@ -98,13 +139,13 @@ func newBotGamesTable() table.Model {
 	return t
 }
 
-func startBotGamesLoad(m model) (model, tea.Cmd) {
-	if m.player == nil {
+func (m botModel) startBotGamesLoad() (botModel, tea.Cmd) {
+	if m.ctx.player == nil {
 		return m, nil
 	}
 	m.botGamesLoading = true
 	m.botGamesErr = ""
-	return m, loadBotGamesCmd(m.fingerPrint)
+	return m, tea.Batch(m.botSpinner.Tick, loadBotGamesCmd(m.ctx.fingerPrint))
 }
 
 func persistAndRemoveBotGame(gameID string) {
@@ -119,12 +160,12 @@ func persistAndRemoveBotGame(gameID string) {
 	botGameManager.RemoveBotGame(gameID)
 }
 
-// UpdateBot is the entry point for the bot page. Mirrors the structure of
+// Update is the entry point for the bot page. Mirrors the structure of
 // UpdateGame but with no clocks and no opponent messaging.
-func (m model) UpdateBot(msg tea.Msg) (model, tea.Cmd) {
+func (m botModel) Update(msg tea.Msg) (botModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case botGamesRefreshMsg:
-		return startBotGamesLoad(m)
+		return m.startBotGamesLoad()
 	case loadBotGamesMsg:
 		m.botGamesLoading = false
 		if msg.err != nil {
@@ -136,6 +177,10 @@ func (m model) UpdateBot(msg tea.Msg) (model, tea.Cmd) {
 		return m, nil
 	case botMoveMsg:
 		return m.handleBotMove(msg)
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.botSpinner, cmd = m.botSpinner.Update(msg)
+		return m, cmd
 	}
 
 	if m.currentBotGame == nil {
@@ -150,12 +195,11 @@ func (m model) UpdateBot(msg tea.Msg) (model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) updateBotLobby(msg tea.Msg) (model, tea.Cmd) {
+func (m botModel) updateBotLobby(msg tea.Msg) (botModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "esc":
-			m = m.navigateTo(PageChat)
-			return m, m.chatTextarea.Focus()
+			return m, navigateToChatCmdBot()
 		case "1":
 			m.botSelectedLevel = 1100
 			return m, nil
@@ -186,10 +230,10 @@ func (m model) updateBotLobby(msg tea.Msg) (model, tea.Cmd) {
 				return m, nil
 			}
 			username := ""
-			if m.player != nil {
-				username = m.player.Username
+			if m.ctx.player != nil {
+				username = m.ctx.player.Username
 			}
-			game, err := botGameManager.CreateBotGame(m.fingerPrint, username, m.botSelectedColor, m.botSelectedLevel)
+			game, err := botGameManager.CreateBotGame(m.ctx.fingerPrint, username, m.botSelectedColor, m.botSelectedLevel)
 			if err != nil {
 				m.botNotice = err.Error()
 				return m, nil
@@ -216,7 +260,7 @@ func (m model) updateBotLobby(msg tea.Msg) (model, tea.Cmd) {
 // shortcuts. Bot games are intentionally mouse-only — there is no UCI text
 // input on this page, which keeps the layout simple and avoids interfering
 // with bubblezone's column tracking.
-func (m model) updateBotInProgress(msg tea.Msg) (model, tea.Cmd) {
+func (m botModel) updateBotInProgress(msg tea.Msg) (botModel, tea.Cmd) {
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
 		return m.handleBotBoardMouse(mouseMsg)
 	}
@@ -226,10 +270,9 @@ func (m model) updateBotInProgress(msg tea.Msg) (model, tea.Cmd) {
 		case "esc":
 			m.selected = ""
 			m.possibleMoves = nil
-			m = m.navigateTo(PageChat)
-			return m, m.chatTextarea.Focus()
+			return m, navigateToChatCmdBot()
 		case "ctrl+x":
-			game, err := botGameManager.Resign(m.fingerPrint)
+			game, err := botGameManager.Resign(m.ctx.fingerPrint)
 			if err != nil {
 				m.botNotice = err.Error()
 				return m, nil
@@ -237,24 +280,24 @@ func (m model) updateBotInProgress(msg tea.Msg) (model, tea.Cmd) {
 			m.currentBotGame = game
 			m.botNotice = "You resigned."
 			persistAndRemoveBotGame(game.ID())
-			return m, loadBotGamesCmd(m.fingerPrint)
+			return m, loadBotGamesCmd(m.ctx.fingerPrint)
 		}
 	}
 	return m, nil
 }
 
-func (m model) updateBotFinished(msg tea.Msg) (model, tea.Cmd) {
+func (m botModel) updateBotFinished(msg tea.Msg) (botModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
 		m.currentBotGame = nil
 		m.selected = ""
 		m.possibleMoves = nil
 		m.botNotice = ""
-		return startBotGamesLoad(m)
+		return m.startBotGamesLoad()
 	}
 	return m, nil
 }
 
-func (m model) handleBotMove(msg botMoveMsg) (model, tea.Cmd) {
+func (m botModel) handleBotMove(msg botMoveMsg) (botModel, tea.Cmd) {
 	if m.currentBotGame == nil || m.currentBotGame.ID() != msg.gameID {
 		return m, nil
 	}
@@ -274,12 +317,12 @@ func (m model) handleBotMove(msg botMoveMsg) (model, tea.Cmd) {
 	if game.Status() == managers.GameStatusFinished {
 		gameID := game.ID()
 		persistAndRemoveBotGame(gameID)
-		return m, loadBotGamesCmd(m.fingerPrint)
+		return m, loadBotGamesCmd(m.ctx.fingerPrint)
 	}
 	return m, nil
 }
 
-func (m model) handleBotBoardMouse(msg tea.MouseMsg) (model, tea.Cmd) {
+func (m botModel) handleBotBoardMouse(msg tea.MouseMsg) (botModel, tea.Cmd) {
 	if msg.Action != tea.MouseActionRelease || msg.Button != tea.MouseButtonLeft {
 		return m, nil
 	}
@@ -298,7 +341,7 @@ func (m model) handleBotBoardMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 	for i := 0; i < 8; i++ {
 		for j := 0; j < 8; j++ {
 			pos := convertToChessboardPosition(j, i, colorIsWhite)
-			if m.zone.Get(pos).InBounds(msg) {
+			if m.ctx.zone.Get(pos).InBounds(msg) {
 				doesClick = true
 
 				if m.selected == "" {
@@ -326,9 +369,9 @@ func (m model) handleBotBoardMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 					m.possibleMoves = validMovesFromSelected
 				} else {
 					moveUCI := m.selected + pos
-					game, err := botGameManager.MakePlayerMove(m.fingerPrint, moveUCI)
+					game, err := botGameManager.MakePlayerMove(m.ctx.fingerPrint, moveUCI)
 					if err != nil {
-						game2, perr := botGameManager.MakePlayerMove(m.fingerPrint, moveUCI+"q")
+						game2, perr := botGameManager.MakePlayerMove(m.ctx.fingerPrint, moveUCI+"q")
 						if perr != nil {
 							m.botNotice = "Move rejected: " + err.Error()
 						} else {
@@ -350,7 +393,7 @@ func (m model) handleBotBoardMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 					if game.Status() == managers.GameStatusFinished {
 						gameID := game.ID()
 						persistAndRemoveBotGame(gameID)
-						return m, loadBotGamesCmd(m.fingerPrint)
+						return m, loadBotGamesCmd(m.ctx.fingerPrint)
 					}
 
 					m.botMoving = true
@@ -368,10 +411,10 @@ func (m model) handleBotBoardMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) renderBotBoardFromFEN() string {
+func (m botModel) renderBotBoardFromFEN() string {
 	fen := m.currentBotGame.Game().FEN()
 	colorIsWhite := m.currentBotGame.PlayerColor() != chess.Black
-	return m.renderChessBoard(fen, colorIsWhite)
+	return renderChessBoard(m.ctx.renderer, m.ctx.zone, fen, colorIsWhite, m.selected, m.possibleMoves)
 }
 
 func botStatusLine(g *managers.BotGame) string {
@@ -404,7 +447,7 @@ func botTurnLine(g *managers.BotGame, botMoving bool) string {
 	return "You are " + you + ". Bot to move."
 }
 
-func (m model) ViewBot() string {
+func (m botModel) View() string {
 	if m.currentBotGame == nil {
 		return m.viewBotLobby()
 	}
@@ -417,16 +460,18 @@ func (m model) ViewBot() string {
 	return ""
 }
 
-func (m model) viewBotLobby() string {
-	titleStyle := m.renderer.NewStyle().
+func (m botModel) viewBotLobby() string {
+	r := m.ctx.renderer
+
+	titleStyle := r.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("62")).
 		Padding(0, 1)
 
-	helpStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("241"))
-	highlightStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
-	infoStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("252"))
-	noticeStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Padding(0, 1)
+	helpStyle := r.NewStyle().Foreground(lipgloss.Color("241"))
+	highlightStyle := r.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	infoStyle := r.NewStyle().Foreground(lipgloss.Color("252"))
+	noticeStyle := r.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Padding(0, 1)
 
 	rows := []string{
 		titleStyle.Render(botPageTitle),
@@ -453,26 +498,28 @@ func (m model) viewBotLobby() string {
 	rows = append(rows, "", infoStyle.Render("Your bot games:"))
 	switch {
 	case m.botGamesLoading:
-		rows = append(rows, m.usernameSpinner.View()+" loading...")
+		rows = append(rows, m.botSpinner.View()+" loading...")
 	case m.botGamesErr != "":
-		rows = append(rows, m.renderer.NewStyle().Foreground(lipgloss.Color("9")).Render(m.botGamesErr))
+		rows = append(rows, r.NewStyle().Foreground(lipgloss.Color("9")).Render(m.botGamesErr))
 	case len(m.botGamesTable.Rows()) == 0:
-		rows = append(rows, m.renderer.NewStyle().Faint(true).Render("No bot games yet."))
+		rows = append(rows, r.NewStyle().Faint(true).Render("No bot games yet."))
 	default:
 		rows = append(rows, m.botGamesTable.View())
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-func (m model) botHeaderRows() []string {
-	titleStyle := m.renderer.NewStyle().
+func (m botModel) botHeaderRows() []string {
+	r := m.ctx.renderer
+
+	titleStyle := r.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("62")).
 		Padding(0, 1)
 
-	infoStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("252"))
-	highlightStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
-	noticeStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Padding(0, 1)
+	infoStyle := r.NewStyle().Foreground(lipgloss.Color("252"))
+	highlightStyle := r.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	noticeStyle := r.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Padding(0, 1)
 
 	rows := []string{
 		titleStyle.Render(botPageTitle),
@@ -490,14 +537,14 @@ func (m model) botHeaderRows() []string {
 	return rows
 }
 
-func (m model) viewBotInProgress() string {
-	helpStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("241"))
+func (m botModel) viewBotInProgress() string {
+	helpStyle := m.ctx.renderer.NewStyle().Foreground(lipgloss.Color("241"))
 	rows := append(m.botHeaderRows(), "", m.renderBotBoardFromFEN(), "", helpStyle.Render(botHelpMove), helpStyle.Render(botHelpResign))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-func (m model) viewBotFinished() string {
-	helpStyle := m.renderer.NewStyle().Foreground(lipgloss.Color("241"))
+func (m botModel) viewBotFinished() string {
+	helpStyle := m.ctx.renderer.NewStyle().Foreground(lipgloss.Color("241"))
 	rows := append(m.botHeaderRows(), "", m.renderBotBoardFromFEN(), "", helpStyle.Render("Press esc to return to bot lobby."))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
