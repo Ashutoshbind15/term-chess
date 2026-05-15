@@ -1,42 +1,34 @@
 package main
 
 import (
+	"sync"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/log"
 )
 
 type SessionManager struct {
+	mu                   sync.RWMutex
 	fingerPrintToProgram map[string]*tea.Program
 }
 
 func (s *SessionManager) SetProgram(fingerPrint string, program *tea.Program) {
 	log.Info("Setting program for fingerprint", "fingerprint", fingerPrint)
+	s.mu.Lock()
 	s.fingerPrintToProgram[fingerPrint] = program
+	s.mu.Unlock()
 }
 
 func (s *SessionManager) GetProgram(fingerPrint string) *tea.Program {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.fingerPrintToProgram[fingerPrint]
 }
 
 func (s *SessionManager) RemoveProgram(fingerPrint string) {
+	s.mu.Lock()
 	delete(s.fingerPrintToProgram, fingerPrint)
-}
-
-func (s *SessionManager) SendMessage(senderFingerprint string, msg message) tea.BatchMsg {
-	var cmds []tea.Cmd
-	for fingerPrint, program := range s.fingerPrintToProgram {
-		cmf := func() tea.Msg {
-			if senderFingerprint == fingerPrint {
-				return msg
-			} else {
-				program.Send(msg)
-				return nil
-			}
-		}
-
-		cmds = append(cmds, cmf)
-	}
-	return cmds
+	s.mu.Unlock()
 }
 
 func NewSessionManager() *SessionManager {

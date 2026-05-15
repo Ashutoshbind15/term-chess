@@ -46,6 +46,7 @@ var dataManager *managers.DataManager
 var gameManager *managers.GameManager
 var botGameManager *managers.BotGameManager
 var botAPIManager *managers.BotAPIManager
+var chatRoom *ChatRoom
 
 func main() {
 	host := sshListenHost()
@@ -55,6 +56,7 @@ func main() {
 	gameManager = managers.NewGameManager()
 	botGameManager = managers.NewBotGameManager()
 	botAPIManager = managers.NewBotAPIManager()
+	chatRoom = NewChatRoom()
 
 	clockStop := make(chan struct{})
 	defer close(clockStop)
@@ -71,6 +73,7 @@ func main() {
 		}),
 		wish.WithMiddleware(
 			customMiddleWare(),
+			sessionCleanupMiddleware(),
 			activeterm.Middleware(), // Bubble Tea apps usually require a PTY.
 			logging.Middleware(),
 		),
@@ -128,9 +131,32 @@ func customMiddleWare() wish.Middleware {
 	return bubbletea.MiddlewareWithProgramHandler(teaHandler, termenv.ANSI256)
 }
 
+// sessionCleanupMiddleware tears down per-session state once the bubbletea
+// program has exited. Placed outside customMiddleWare in the middleware
+// chain so its deferred cleanup fires after the program returns.
+func sessionCleanupMiddleware() wish.Middleware {
+	return func(next ssh.Handler) ssh.Handler {
+		return func(s ssh.Session) {
+			fp, _ := s.Context().Value("fingerprint").(string)
+			defer func() {
+				if fp != "" {
+					chatRoom.Leave(fp)
+					sessionManager.RemoveProgram(fp)
+				}
+			}()
+			next(s)
+		}
+	}
+}
+
 type message struct {
 	sender  string
 	content string
+	system  bool
+}
+
+type presenceMsg struct {
+	count int
 }
 
 type opponentJoinedGameMsg struct {

@@ -78,6 +78,15 @@ func (m appModel) closePageSelect() appModel {
 	return m
 }
 
+// effectivePage returns the "real" page the user is on, treating the
+// transient menu overlay (PageSelect) as the page underneath it.
+func (m appModel) effectivePage() Page {
+	if m.page == PageSelect && m.previousPage != nil {
+		return *m.previousPage
+	}
+	return m.page
+}
+
 // navigateTo validates the destination, then activates the target page so
 // the new page can register any follow-up command (focus, refresh, etc).
 func (m appModel) navigateTo(page Page) (appModel, tea.Cmd) {
@@ -85,6 +94,9 @@ func (m appModel) navigateTo(page Page) (appModel, tea.Cmd) {
 	// an unexpected action
 	if (page == PageChat || page == PageGame || page == PageBot) && m.ctx.player == nil {
 		page = PageIntro
+	}
+	if m.effectivePage() == PageChat && page != PageChat {
+		m.chat = m.chat.Deactivate()
 	}
 	m.page = page
 	m.previousPage = nil
@@ -161,6 +173,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.bot, cmd = m.bot.Update(msg)
 		return m, cmd
 	case message:
+		var cmd tea.Cmd
+		m.chat, cmd = m.chat.Update(msg)
+		return m, cmd
+	case presenceMsg:
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(msg)
 		return m, cmd
