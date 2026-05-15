@@ -40,9 +40,20 @@ type chatSub struct {
 	username string
 }
 
+type chatJoinResult struct {
+	backlog []message
+	count   int
+	joined  bool
+}
+
+type chatLifecycleState struct {
+	epoch uint64
+}
+
 type ChatRoom struct {
 	mu          sync.Mutex
 	subscribers map[string]*chatSub
+	lifecycle   map[string]chatLifecycleState
 	recent      []message
 	rate        map[string][]time.Time
 	now         func() time.Time
@@ -51,23 +62,33 @@ type ChatRoom struct {
 func NewChatRoom() *ChatRoom {
 	return &ChatRoom{
 		subscribers: make(map[string]*chatSub),
+		lifecycle:   make(map[string]chatLifecycleState),
 		rate:        make(map[string][]time.Time),
 		now:         time.Now,
 	}
 }
 
-// Join registers the fingerprint as a current viewer of the chat page. It
-// returns the recent backlog so the joiner can render some context. If this
-// is a fresh join, a system message is broadcast to the rest of the room.
-// Idempotent: rejoining (e.g. after closing the menu) does not re-broadcast.
-func (c *ChatRoom) Join(fp string, p chatSender, username string) []message {
+// Join registers the fingerprint as a current viewer of the chat page. The
+// caller supplies a monotonically increasing epoch so a stale join cmd cannot
+// re-subscribe a user after they've already navigated away. It returns the
+// recent backlog so the joiner can render some context. If this is a fresh
+// join, a system message is broadcast to the rest of the room.
+func (c *ChatRoom) Join(fp string, p chatSender, username string, epoch uint64) chatJoinResult {
 	c.mu.Lock()
 	backlog := append([]message(nil), c.recent...)
-	if !chatSenderReady(p) {
+	state := c.lifecycle[fp]
+	if epoch <= state.epoch {
+		count := len(c.subscribers)
 		c.mu.Unlock()
-		return backlog
+		return chatJoinResult{backlog: backlog, count: count}
+	}
+	if !chatSenderReady(p) {
+		count := len(c.subscribers)
+		c.mu.Unlock()
+		return chatJoinResult{backlog: backlog, count: count}
 	}
 	_, already := c.subscribers[fp]
+	c.lifecycle[fp] = chatLifecycleState{epoch: epoch}
 	c.subscribers[fp] = &chatSub{program: p, username: username}
 	subs := c.snapshotLocked()
 	count := len(subs)
@@ -78,13 +99,19 @@ func (c *ChatRoom) Join(fp string, p chatSender, username string) []message {
 		fanout(subs, fp, message{system: true, sender: username, content: "joined", at: now})
 	}
 	broadcastPresence(subs, count)
-	return backlog
+	return chatJoinResult{backlog: backlog, count: count, joined: true}
 }
 
-// Leave removes the fingerprint from the room, notifies others, and drops
-// its rate-limit state. Safe to call when the user was never a member.
-func (c *ChatRoom) Leave(fp string) {
+// LeaveActive removes the fingerprint from the room for the supplied epoch,
+// ignoring stale leave cmds from older activations.
+func (c *ChatRoom) LeaveActive(fp string, epoch uint64) {
 	c.mu.Lock()
+	state := c.lifecycle[fp]
+	if epoch < state.epoch {
+		c.mu.Unlock()
+		return
+	}
+	c.lifecycle[fp] = chatLifecycleState{epoch: epoch}
 	prev, was := c.subscribers[fp]
 	delete(c.subscribers, fp)
 	delete(c.rate, fp)
@@ -102,11 +129,36 @@ func (c *ChatRoom) Leave(fp string) {
 	broadcastPresence(subs, count)
 }
 
-// Broadcast fan-out; empty dropped. Rate limit or abuse → private system line (abuse checked first).
-func (c *ChatRoom) Broadcast(senderFP string, msg message) tea.Cmd {
+// Leave forcibly removes the fingerprint from the room during session teardown.
+// This path is server-side cleanup rather than a Bubble Tea lifecycle cmd.
+func (c *ChatRoom) Leave(fp string) {
+	c.mu.Lock()
+	prev, was := c.subscribers[fp]
+	delete(c.subscribers, fp)
+	delete(c.rate, fp)
+	delete(c.lifecycle, fp)
+	subs := c.snapshotLocked()
+	count := len(subs)
+	now := c.now()
+	c.mu.Unlock()
+
+	if !was {
+		return
+	}
+	if prev.username != "" {
+		fanout(subs, "", message{system: true, sender: prev.username, content: "left", at: now})
+	}
+	broadcastPresence(subs, count)
+}
+
+// Broadcast applies server-side chat rules, fans the message out to the
+// current subscribers, and returns the sender-local message that should be
+// fed back into Bubble Tea by the caller's cmd wrapper. Empty input is
+// dropped and reported as ok=false.
+func (c *ChatRoom) Broadcast(senderFP string, msg message) (local message, ok bool) {
 	msg.content = strings.TrimSpace(msg.content)
 	if msg.content == "" {
-		return nil
+		return message{}, false
 	}
 	if len(msg.content) > chatMaxMessageLen {
 		msg.content = msg.content[:chatMaxMessageLen]
@@ -115,9 +167,7 @@ func (c *ChatRoom) Broadcast(senderFP string, msg message) tea.Cmd {
 
 	if notice := chatAbuseNotice(msg.content); notice != "" {
 		now := c.now()
-		return func() tea.Msg {
-			return message{system: true, content: notice, at: now}
-		}
+		return message{system: true, content: notice, at: now}, true
 	}
 
 	c.mu.Lock()
@@ -129,7 +179,7 @@ func (c *ChatRoom) Broadcast(senderFP string, msg message) tea.Cmd {
 			content: "you're sending messages too fast — slow down",
 			at:      now,
 		}
-		return func() tea.Msg { return notice }
+		return notice, true
 	}
 	msg.at = now
 	c.recent = append(c.recent, msg)
@@ -140,7 +190,7 @@ func (c *ChatRoom) Broadcast(senderFP string, msg message) tea.Cmd {
 	c.mu.Unlock()
 
 	fanout(subs, senderFP, msg)
-	return func() tea.Msg { return msg }
+	return msg, true
 }
 
 // allowLocked checks and updates the per-sender sliding window. Caller holds

@@ -95,12 +95,22 @@ func (m appModel) navigateTo(page Page) (appModel, tea.Cmd) {
 	if (page == PageChat || page == PageGame || page == PageBot) && m.ctx.player == nil {
 		page = PageIntro
 	}
+	var cmds []tea.Cmd
 	if m.effectivePage() == PageChat && page != PageChat {
-		m.chat = m.chat.Deactivate()
+		var cmd tea.Cmd
+		m.chat, cmd = m.chat.Deactivate()
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 	m.page = page
 	m.previousPage = nil
-	return m.activateCurrentPage()
+	var activateCmd tea.Cmd
+	m, activateCmd = m.activateCurrentPage()
+	if activateCmd != nil {
+		cmds = append(cmds, activateCmd)
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func (m appModel) activateCurrentPage() (appModel, tea.Cmd) {

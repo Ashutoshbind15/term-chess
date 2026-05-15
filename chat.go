@@ -41,6 +41,8 @@ type chatModel struct {
 	messages     []message
 	onlineCount  int
 	joined       bool
+	joinPending  bool
+	joinEpoch    uint64
 }
 
 func newChatModel(ctx *Context) chatModel {
@@ -51,37 +53,76 @@ func newChatModel(ctx *Context) chatModel {
 
 func (m chatModel) Init() tea.Cmd { return nil }
 
+type chatJoinedMsg struct {
+	epoch   uint64
+	backlog []message
+	count   int
+	joined  bool
+}
+
+func chatJoinCmd(fingerprint, username string, epoch uint64) tea.Cmd {
+	return func() tea.Msg {
+		prog := sessionManager.GetProgram(fingerprint)
+		if prog == nil {
+			return chatJoinedMsg{epoch: epoch}
+		}
+		res := chatRoom.Join(fingerprint, prog, username, epoch)
+		return chatJoinedMsg{
+			epoch:   epoch,
+			backlog: res.backlog,
+			count:   res.count,
+			joined:  res.joined,
+		}
+	}
+}
+
+func chatLeaveCmd(fingerprint string, epoch uint64) tea.Cmd {
+	return func() tea.Msg {
+		chatRoom.LeaveActive(fingerprint, epoch)
+		return nil
+	}
+}
+
+func chatBroadcastCmd(fingerprint string, msg message) tea.Cmd {
+	return func() tea.Msg {
+		local, ok := chatRoom.Broadcast(fingerprint, msg)
+		if !ok {
+			return nil
+		}
+		return local
+	}
+}
+
 // Activate is called every time the user lands on the chat page (including
 // returning from the menu). It joins the room on the first activation and
 // seeds the local view with whatever recent backlog the room has.
 func (m chatModel) Activate() (chatModel, tea.Cmd) {
+	focusCmd := m.chatTextarea.Focus()
 	if m.ctx.player == nil {
-		return m, m.chatTextarea.Focus()
+		return m, focusCmd
 	}
-	if !m.joined {
-		prog := sessionManager.GetProgram(m.ctx.fingerPrint)
-		if prog == nil {
-			return m, m.chatTextarea.Focus()
-		}
-		backlog := chatRoom.Join(m.ctx.fingerPrint, prog, m.ctx.player.Username)
-		m.messages = backlog
-		m.joined = true
+	if m.joined || m.joinPending {
+		return m, focusCmd
 	}
-	return m, m.chatTextarea.Focus()
+	m.joinEpoch++
+	m.joinPending = true
+	return m, tea.Batch(focusCmd, chatJoinCmd(m.ctx.fingerPrint, m.ctx.player.Username, m.joinEpoch))
 }
 
 // Deactivate is called by the root model when the user navigates away from
-// the chat page (but not when temporarily opening the menu). It leaves the
-// room so further messages are not delivered, and clears the local buffer.
-func (m chatModel) Deactivate() chatModel {
-	if !m.joined {
-		return m
+// the chat page (but not when temporarily opening the menu). It clears the
+// local buffer immediately and returns the server-side leave cmd so the
+// Bubble Tea lifecycle remains side-effect free.
+func (m chatModel) Deactivate() (chatModel, tea.Cmd) {
+	if !m.joined && !m.joinPending {
+		return m, nil
 	}
-	chatRoom.Leave(m.ctx.fingerPrint)
+	epoch := m.joinEpoch
 	m.joined = false
+	m.joinPending = false
 	m.messages = nil
 	m.onlineCount = 0
-	return m
+	return m, chatLeaveCmd(m.ctx.fingerPrint, epoch)
 }
 
 func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
@@ -95,7 +136,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			if m.ctx.player == nil || !m.joined {
 				return m, tiCmd
 			}
-			cmd := chatRoom.Broadcast(m.ctx.fingerPrint, message{
+			cmd := chatBroadcastCmd(m.ctx.fingerPrint, message{
 				sender:  m.ctx.player.Username,
 				content: m.chatTextarea.Value(),
 			})
@@ -104,12 +145,29 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			}
 			m.chatTextarea.Reset()
 		}
+	case chatJoinedMsg:
+		if !m.joinPending || msg.epoch != m.joinEpoch {
+			break
+		}
+		m.joinPending = false
+		if !msg.joined {
+			break
+		}
+		m.joined = true
+		m.messages = msg.backlog
+		m.onlineCount = msg.count
 	case message:
+		if !m.joined {
+			break
+		}
 		m.messages = append(m.messages, msg)
 		if len(m.messages) > chatMaxClientLines {
 			m.messages = m.messages[len(m.messages)-chatMaxClientLines:]
 		}
 	case presenceMsg:
+		if !m.joined {
+			break
+		}
 		m.onlineCount = msg.count
 	}
 
