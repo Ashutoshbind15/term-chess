@@ -168,7 +168,7 @@ Example values are provided in `.env.example`.
 - `DB_URL`
   - Postgres connection string
 - `BOT_API_URL`
-  - base URL for the [`elo-based-rec`](https://github.com/Ashutoshbind15/elo-based-rec) service
+  - base URL for the [`elo-based-rec`](https://github.com/Ashutoshbind15/elo-based-rec) service (must expose `GET /health` before the bot page loads)
 - `DEBUG`
   - when set, message traffic is dumped to `messages.log`
 

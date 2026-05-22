@@ -29,12 +29,28 @@ type botMoveMsg struct {
 	err    error
 }
 
+type botAPIHealthMsg struct {
+	err error
+}
+
 type loadBotGamesMsg struct {
 	games []common.BotGame
 	err   error
 }
 
 type botGamesRefreshMsg struct{}
+
+// botPageKind selects which subsection of the bot page handles input/rendering,
+// analogous to routing between lobby vs in-progress game updates.
+type botPageKind int
+
+const (
+	botPageHealthChecking botPageKind = iota
+	botPageHealthFailed
+	botPageLobby
+	botPageGameInProgress
+	botPageGameFinished
+)
 
 type botModel struct {
 	ctx *Context
@@ -52,6 +68,31 @@ type botModel struct {
 
 	botGamesLoading bool
 	botGamesErr     string
+
+	botAPICheckInFlight bool
+	botAPIServiceReady  bool
+	botAPIServiceErr    string
+}
+
+// botPageKind returns the active subsection derived from bot API readiness and game state.
+func (m botModel) botPageKind() botPageKind {
+	if m.botAPICheckInFlight {
+		return botPageHealthChecking
+	}
+	if !m.botAPIServiceReady {
+		return botPageHealthFailed
+	}
+	if m.currentBotGame == nil {
+		return botPageLobby
+	}
+	switch m.currentBotGame.Status() {
+	case managers.GameStatusInProgress:
+		return botPageGameInProgress
+	case managers.GameStatusFinished:
+		return botPageGameFinished
+	default:
+		return botPageLobby
+	}
 }
 
 func newBotModel(ctx *Context) botModel {
@@ -66,10 +107,17 @@ func newBotModel(ctx *Context) botModel {
 func (m botModel) Init() tea.Cmd { return nil }
 
 func (m botModel) Activate() (botModel, tea.Cmd) {
-	if m.currentBotGame == nil {
-		return m, func() tea.Msg { return botGamesRefreshMsg{} }
+	m.botAPICheckInFlight = true
+	m.botAPIServiceReady = false
+	m.botAPIServiceErr = ""
+	return m, tea.Batch(m.botSpinner.Tick, checkBotAPIServiceCmd())
+}
+
+func checkBotAPIServiceCmd() tea.Cmd {
+	return func() tea.Msg {
+		err := botAPIManager.HealthCheck()
+		return botAPIHealthMsg{err: err}
 	}
-	return m, nil
 }
 
 func navigateToChatCmdBot() tea.Cmd {
@@ -167,10 +215,55 @@ func persistAndReloadBotGameCmd(gameID, fingerprint string) tea.Cmd {
 	}
 }
 
+func (m botModel) updateBotHealthChecking(msg tea.Msg) (botModel, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
+		m.botAPICheckInFlight = false
+		m.botAPIServiceErr = ""
+		return m, navigateToChatCmdBot()
+	}
+	return m, nil
+}
+
+func (m botModel) updateBotHealthFailed(msg tea.Msg) (botModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.botAPICheckInFlight = false
+			m.botAPIServiceErr = ""
+			return m, navigateToChatCmdBot()
+		case "ctrl+r":
+			m.botAPICheckInFlight = true
+			m.botAPIServiceErr = ""
+			return m, tea.Batch(m.botSpinner.Tick, checkBotAPIServiceCmd())
+		}
+	}
+	return m, nil
+}
+
 // Update is the entry point for the bot page. Mirrors the structure of
 // UpdateGame but with no clocks and no opponent messaging.
 func (m botModel) Update(msg tea.Msg) (botModel, tea.Cmd) {
+	if spin, ok := msg.(spinner.TickMsg); ok && m.botPageKind() == botPageHealthChecking {
+		var cmd tea.Cmd
+		m.botSpinner, cmd = m.botSpinner.Update(spin)
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
+	case botAPIHealthMsg:
+		m.botAPICheckInFlight = false
+		if msg.err != nil {
+			m.botAPIServiceReady = false
+			m.botAPIServiceErr = msg.err.Error()
+			return m, nil
+		}
+		m.botAPIServiceReady = true
+		m.botAPIServiceErr = ""
+		if m.currentBotGame == nil {
+			return m.startBotGamesLoad()
+		}
+		return m, nil
 	case botGamesRefreshMsg:
 		return m.startBotGamesLoad()
 	case loadBotGamesMsg:
@@ -190,16 +283,20 @@ func (m botModel) Update(msg tea.Msg) (botModel, tea.Cmd) {
 		return m, cmd
 	}
 
-	if m.currentBotGame == nil {
+	switch m.botPageKind() {
+	case botPageHealthChecking:
+		return m.updateBotHealthChecking(msg)
+	case botPageHealthFailed:
+		return m.updateBotHealthFailed(msg)
+	case botPageLobby:
 		return m.updateBotLobby(msg)
-	}
-	switch m.currentBotGame.Status() {
-	case managers.GameStatusInProgress:
+	case botPageGameInProgress:
 		return m.updateBotInProgress(msg)
-	case managers.GameStatusFinished:
+	case botPageGameFinished:
 		return m.updateBotFinished(msg)
+	default:
+		return m, nil
 	}
-	return m, nil
 }
 
 func (m botModel) updateBotLobby(msg tea.Msg) (botModel, tea.Cmd) {
@@ -450,16 +547,39 @@ func botTurnLine(g *managers.BotGame, botMoving bool) string {
 }
 
 func (m botModel) View() string {
-	if m.currentBotGame == nil {
+	switch m.botPageKind() {
+	case botPageHealthChecking:
+		return m.viewBotHealthCheck()
+	case botPageHealthFailed:
+		return m.viewBotAPIUnavailable()
+	case botPageLobby:
 		return m.viewBotLobby()
-	}
-	switch m.currentBotGame.Status() {
-	case managers.GameStatusInProgress:
+	case botPageGameInProgress:
 		return m.viewBotInProgress()
-	case managers.GameStatusFinished:
+	case botPageGameFinished:
 		return m.viewBotFinished()
+	default:
+		return ""
 	}
-	return ""
+}
+
+func (m botModel) viewBotHealthCheck() string {
+	r := m.ctx.renderer
+	title := r.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).Padding(0, 1).Render(botPageTitle)
+	body := r.NewStyle().Foreground(lipgloss.Color("241")).Render("Checking bot engine (GET /health)…")
+	urlLine := r.NewStyle().Foreground(lipgloss.Color("252")).Render(botAPIManager.BaseURL())
+	help := r.NewStyle().Foreground(lipgloss.Color("241")).Render("esc · return to lobby")
+	return lipgloss.JoinVertical(lipgloss.Left, title, "", m.botSpinner.View()+" "+body, "", urlLine, "", help)
+}
+
+func (m botModel) viewBotAPIUnavailable() string {
+	r := m.ctx.renderer
+	title := r.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).Padding(0, 1).Render(botPageTitle)
+	head := r.NewStyle().Foreground(lipgloss.Color("9")).Render("Bot engine is not reachable.")
+	detail := r.NewStyle().Foreground(lipgloss.Color("252")).Render(m.botAPIServiceErr)
+	base := r.NewStyle().Foreground(lipgloss.Color("241")).Render("BOT_API_URL: " + botAPIManager.BaseURL())
+	help := r.NewStyle().Foreground(lipgloss.Color("241")).Render("ctrl+r · retry health check   esc · return to lobby")
+	return lipgloss.JoinVertical(lipgloss.Left, title, "", head, "", detail, "", base, "", help)
 }
 
 func (m botModel) viewBotLobby() string {

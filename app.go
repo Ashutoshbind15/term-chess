@@ -170,7 +170,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.game, cmd = m.game.Update(msg)
 		return m, cmd
-	case botMoveMsg:
+	case botMoveMsg, botAPIHealthMsg:
 		var cmd tea.Cmd
 		m.bot, cmd = m.bot.Update(msg)
 		return m, cmd

@@ -56,6 +56,43 @@ type bestMoveResponse struct {
 	Error    string `json:"error,omitempty"`
 }
 
+type healthResponse struct {
+	OK bool `json:"ok"`
+}
+
+// HealthCheck calls GET /health on the bot service (elo-based-rec). Any 2xx
+// response counts as reachable; when the JSON body includes "ok": false, the
+// service is treated as unhealthy.
+func (b *BotAPIManager) HealthCheck() error {
+	if b == nil {
+		return fmt.Errorf("bot api not configured")
+	}
+	req, err := http.NewRequest(http.MethodGet, b.baseURL+"/health", nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("health status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var parsed healthResponse
+	if err := json.Unmarshal(body, &parsed); err == nil && !parsed.OK {
+		return fmt.Errorf("health reports ok=false")
+	}
+	return nil
+}
+
 // BestMove asks the bot service for its best move from the given FEN at the
 // given level. Returns the move in UCI notation (e.g. "e2e4").
 func (b *BotAPIManager) BestMove(fen string, level int) (string, error) {
