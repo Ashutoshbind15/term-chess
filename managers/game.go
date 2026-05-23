@@ -3,12 +3,18 @@ package managers
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Ashutoshbind15/ssh-chess/common"
 	"github.com/google/uuid"
 	"github.com/notnil/chess"
+)
+
+const (
+	gameCodeLength  = 6
+	gameCodeCharset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0246789" // excludes 1, 3, 5 (time-control keys)
 )
 
 const (
@@ -48,7 +54,8 @@ type GamePlayer struct {
 // Snapshot values instead of *Game pointers, so they cannot observe partial
 // mutations or race with the manager's writers.
 type Game struct {
-	id          string
+	id   string
+	code string
 	whitePlayer *GamePlayer
 	blackPlayer *GamePlayer
 	status      string
@@ -68,7 +75,8 @@ type Game struct {
 // IsPlayersTurn) take a fingerprint and derive their answer from the
 // snapshot's own fields.
 type Snapshot struct {
-	ID               string
+	ID               string // internal UUID
+	Code             string // short display code (e.g. "XK9Z46")
 	FEN              string
 	PGN              string
 	Status           string
@@ -127,6 +135,7 @@ func (g *Game) snapshot() *Snapshot {
 	whiteTime, blackTime := g.currentClocksLocked()
 	s := &Snapshot{
 		ID:            g.id,
+		Code:          g.code,
 		Status:        g.status,
 		TimeControl:   g.timeControl,
 		WhiteTimeLeft: whiteTime,
@@ -177,14 +186,47 @@ func (g *Game) currentClocksLocked() (time.Duration, time.Duration) {
 type GameManager struct {
 	mu      sync.Mutex
 	games   map[string]*Game
+	codes   map[string]string // display code -> internal id
 	players map[string]*GamePlayer
 }
 
 func NewGameManager() *GameManager {
 	return &GameManager{
 		games:   make(map[string]*Game),
+		codes:   make(map[string]string),
 		players: make(map[string]*GamePlayer),
 	}
+}
+
+// generateGameCode returns a unique 6-character alphanumeric code. Caller
+// must hold gm.mu.
+func (gm *GameManager) generateGameCode() string {
+	builder := strings.Builder{}
+	builder.Grow(gameCodeLength)
+	for i := 0; i < gameCodeLength; i++ {
+		builder.WriteByte(gameCodeCharset[rand.Intn(len(gameCodeCharset))])
+	}
+	code := builder.String()
+	if _, exists := gm.codes[code]; exists {
+		return gm.generateGameCode()
+	}
+	return code
+}
+
+// resolveGameID maps a user-facing code or internal UUID to the canonical
+// internal id. Caller must hold gm.mu.
+func (gm *GameManager) resolveGameID(idOrCode string) string {
+	idOrCode = strings.TrimSpace(idOrCode)
+	if idOrCode == "" {
+		return ""
+	}
+	if code := strings.ToUpper(idOrCode); gm.codes[code] != "" {
+		return gm.codes[code]
+	}
+	if gm.games[idOrCode] != nil {
+		return idOrCode
+	}
+	return ""
 }
 
 func (gm *GameManager) SetPlayer(fingerprint string, username string) {
@@ -225,10 +267,12 @@ func (gm *GameManager) CreateGame(fingerprint string, tc TimeControl) (*Snapshot
 	}
 
 	gameId := uuid.New().String()
+	code := gm.generateGameCode()
 	player.currentGameId = gameId
 	color := gm.getColor()
 	g := &Game{
 		id:            gameId,
+		code:          code,
 		status:        GameStatusWaiting,
 		game:          chess.NewGame(chess.UseNotation(chess.UCINotation{})),
 		timeControl:   tc,
@@ -241,6 +285,7 @@ func (gm *GameManager) CreateGame(fingerprint string, tc TimeControl) (*Snapshot
 		g.blackPlayer = player
 	}
 	gm.games[gameId] = g
+	gm.codes[code] = gameId
 
 	return g.snapshot(), nil
 }
@@ -303,7 +348,8 @@ func (gm *GameManager) JoinGame(fingerprint string, gameId string) (*Snapshot, e
 		return nil, fmt.Errorf("player already in a game")
 	}
 
-	game := gm.games[gameId]
+	gameID := gm.resolveGameID(gameId)
+	game := gm.games[gameID]
 	if game == nil {
 		return nil, fmt.Errorf("game not found")
 	}
@@ -328,7 +374,7 @@ func (gm *GameManager) JoinGame(fingerprint string, gameId string) (*Snapshot, e
 
 	game.status = GameStatusInProgress
 	game.turnStartedAt = time.Now()
-	player.currentGameId = gameId
+	player.currentGameId = gameID
 
 	return game.snapshot(), nil
 }
@@ -480,6 +526,7 @@ func (gm *GameManager) SnapshotByID(gameID string) *Snapshot {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
 
+	gameID = gm.resolveGameID(gameID)
 	g := gm.games[gameID]
 	if g == nil {
 		return nil
@@ -491,9 +538,10 @@ func (gm *GameManager) BuildGameRecord(gameID string) common.Game {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
 
+	gameID = gm.resolveGameID(gameID)
 	game := gm.games[gameID]
 	return common.Game{
-		GameID:           game.id,
+		GameID:           game.code,
 		WhiteFingerprint: game.whitePlayer.fingerprint,
 		WhiteUsername:    game.whitePlayer.username,
 		BlackFingerprint: game.blackPlayer.fingerprint,
@@ -512,6 +560,7 @@ func (gm *GameManager) RemoveGame(gameID string) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
 
+	gameID = gm.resolveGameID(gameID)
 	game := gm.games[gameID]
 	if game == nil {
 		return
@@ -522,6 +571,9 @@ func (gm *GameManager) RemoveGame(gameID string) {
 	if game.blackPlayer != nil {
 		game.blackPlayer.currentGameId = ""
 	}
+	if game.code != "" {
+		delete(gm.codes, game.code)
+	}
 	delete(gm.games, gameID)
 }
 
@@ -529,6 +581,7 @@ func (gm *GameManager) OpponentFingerprint(gameID string, fingerprint string) st
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
 
+	gameID = gm.resolveGameID(gameID)
 	g := gm.games[gameID]
 	if g == nil {
 		return ""

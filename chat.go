@@ -231,6 +231,7 @@ func (m chatModel) View() string {
 		}
 	}
 
-	rows = append(rows, "", m.chatTextarea.View())
+	helpStyle := r.NewStyle().Foreground(lipgloss.Color("241"))
+	rows = append(rows, "", m.chatTextarea.View(), "", helpStyle.Render("enter · send   ctrl+c · quit"))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }

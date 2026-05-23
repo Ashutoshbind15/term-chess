@@ -155,7 +155,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.activateCurrentPage()
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "ctrl+c":
+		case "ctrl+c":
 			if m.ctx.zone != nil {
 				m.ctx.zone.Close()
 			}
@@ -241,7 +241,7 @@ func (m appModel) View() string {
 		Align(lipgloss.Center).
 		Width(m.ctx.width).
 		Foreground(lipgloss.Color("241"))
-	footer := footerStyle.Render("Page: " + string(m.page) + " | Press tab to open menu")
+	footer := footerStyle.Render("Page: " + string(m.page) + " | tab · menu | ctrl+c · quit")
 
 	var pageContent string
 	switch m.page {

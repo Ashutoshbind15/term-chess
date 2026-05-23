@@ -19,7 +19,7 @@ const (
 	gamePageTitle      = "Game Page"
 	gameHelpCreate     = "Create a game: ctrl+n"
 	gameHelpJoinRandom = "Join a random game: ctrl+r"
-	gameHelpJoinByID   = "Join by ID: type the game ID below and press enter"
+	gameHelpJoinByID   = "Join by code: type the 6-character game code below and press enter"
 	gameHelpMove       = "Make a move: click a piece then a square, or type UCI like e2e4"
 	gameNoGame         = "No game"
 	gameHelpTimeSelect = "Select time: [1] 1 min  [3] 3 min  [5] 5 min"
@@ -50,8 +50,8 @@ type gameModel struct {
 func newGameModel(ctx *Context) gameModel {
 	gameJoinInput := common.InitTextInput()
 	applyRendererTextInputStyles(&gameJoinInput, ctx.renderer)
-	gameJoinInput.Prompt = "game id> "
-	gameJoinInput.Placeholder = "abc123"
+	gameJoinInput.Prompt = "game code> "
+	gameJoinInput.Placeholder = "XK9Z46"
 	gameJoinInput.Width = textInputViewWidth
 
 	moveInput := common.InitTextInput()
@@ -576,10 +576,10 @@ func (m gameModel) handleLobbyResult(msg gameLobbyResultMsg) (gameModel, tea.Cmd
 	m.moveInput.SetValue("")
 	switch msg.kind {
 	case lobbyActionCreate:
-		m.gameNotice = "Created " + msg.snapshot.TimeControl.String() + " game " + msg.snapshot.ID + ". Share the ID with your opponent."
+		m.gameNotice = "Created " + msg.snapshot.TimeControl.String() + " game " + msg.snapshot.Code + ". Share the code with your opponent."
 		return m, nil
 	case lobbyActionJoin, lobbyActionJoinRandom:
-		m.gameNotice = "Joined " + msg.snapshot.TimeControl.String() + " game " + msg.snapshot.ID + "."
+		m.gameNotice = "Joined " + msg.snapshot.TimeControl.String() + " game " + msg.snapshot.Code + "."
 		if msg.snapshot.Status == managers.GameStatusInProgress {
 			return m, m.moveInput.Focus()
 		}
@@ -863,7 +863,7 @@ func (m gameModel) gameHeaderRows() []string {
 	rows := []string{
 		titleStyle.Render(gamePageTitle),
 		"",
-		infoStyle.Render("Game ID: ") + highlightStyle.Render(m.snapshot.ID),
+		infoStyle.Render("Game: ") + highlightStyle.Render(m.snapshot.Code),
 		infoStyle.Render(gameStatusLine(m.snapshot.Status)),
 	}
 	if m.snapshot.TimeControl != 0 {
