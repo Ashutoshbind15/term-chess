@@ -174,7 +174,7 @@ func botGameRowsFor(games []common.BotGame) []table.Row {
 			g.CreatedAt.Format("2006-01-02 15:04"),
 			color,
 			strconv.Itoa(g.BotLevel),
-			g.Outcome,
+			common.PlayerOutcomeLabel(g.Outcome, color),
 			g.Method,
 		})
 	}
@@ -196,19 +196,7 @@ func newBotGamesTable() table.Model {
 		table.WithFocused(false),
 		table.WithHeight(8),
 	)
-
-	styles := table.DefaultStyles()
-	styles.Header = styles.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		BorderBottom(true).
-		Bold(true)
-	styles.Selected = styles.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
-	t.SetStyles(styles)
-
+	t.SetStyles(viewOnlyTableStyles())
 	return t
 }
 
@@ -382,9 +370,7 @@ func (m botModel) updateBotLobby(msg tea.Msg) (botModel, tea.Cmd) {
 		}
 	}
 
-	var tblCmd tea.Cmd
-	m.botGamesTable, tblCmd = m.botGamesTable.Update(msg)
-	return m, tblCmd
+	return m, nil
 }
 
 // updateBotInProgress only handles mouse input plus a couple of keyboard

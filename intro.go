@@ -35,7 +35,7 @@ func newIntroModel(ctx *Context) introModel {
 		ctx:             ctx,
 		usernameInput:   usernameInput,
 		usernameSpinner: common.InitSpinner(),
-		gamesTable:      newGamesTable(ctx.renderer),
+		gamesTable:      newGamesTable(),
 		introLoading:    true,
 	}
 }
@@ -62,7 +62,19 @@ func (m introModel) Activate() (introModel, tea.Cmd) {
 	return m, nil
 }
 
-func newGamesTable(r *lipgloss.Renderer) table.Model {
+func viewOnlyTableStyles() table.Styles {
+	styles := table.DefaultStyles()
+	styles.Header = styles.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		BorderBottom(true).
+		Bold(true)
+	// Unfocused table still tracks cursor on row 0; empty style avoids a false selection highlight.
+	styles.Selected = lipgloss.NewStyle()
+	return styles
+}
+
+func newGamesTable() table.Model {
 	columns := []table.Column{
 		{Title: "Date", Width: 16},
 		{Title: "Color", Width: 6},
@@ -77,19 +89,7 @@ func newGamesTable(r *lipgloss.Renderer) table.Model {
 		table.WithFocused(false),
 		table.WithHeight(8),
 	)
-
-	styles := table.DefaultStyles()
-	styles.Header = styles.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		BorderBottom(true).
-		Bold(true)
-	styles.Selected = styles.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
-	t.SetStyles(styles)
-
+	t.SetStyles(viewOnlyTableStyles())
 	return t
 }
 
@@ -135,7 +135,7 @@ func gameRowsFor(fingerPrint string, games []common.Game) []table.Row {
 			g.CreatedAt.Format("2006-01-02 15:04"),
 			color,
 			opponent,
-			g.Outcome,
+			common.PlayerOutcomeLabel(g.Outcome, color),
 			g.Method,
 		})
 	}
@@ -208,12 +208,10 @@ func (m introModel) Update(msg tea.Msg) (introModel, tea.Cmd) {
 	}
 
 	if m.ctx.player != nil {
-		var tblCmd tea.Cmd
-		m.gamesTable, tblCmd = m.gamesTable.Update(msg)
 		if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
-			return m, tea.Batch(tblCmd, navigateToChatCmd())
+			return m, navigateToChatCmd()
 		}
-		return m, tblCmd
+		return m, nil
 	}
 
 	var cmd tea.Cmd
