@@ -21,6 +21,8 @@ const (
 	gameHelpJoinRandom = "Join a random game: ctrl+r"
 	gameHelpJoinByID   = "Join by code: type the 6-character game code below and press enter"
 	gameHelpMove       = "Make a move: click a piece then a square, or type UCI like e2e4"
+	gameHelpResign     = "Resign: ctrl+x"
+	gameHelpFinished   = "New game: ctrl+n   Join random: ctrl+r   Lobby: esc"
 	gameNoGame         = "No game"
 	gameHelpTimeSelect = "Select time: [1] 1 min  [3] 3 min  [5] 5 min"
 )
@@ -86,7 +88,12 @@ func (m gameModel) withSnapshot(s *managers.Snapshot) gameModel {
 }
 
 func (m gameModel) Activate() (gameModel, tea.Cmd) {
-	m = m.withSnapshot(gameManager.SnapshotForPlayer(m.ctx.fingerPrint))
+	m.gameNotice = ""
+	if fresh := gameManager.SnapshotForPlayer(m.ctx.fingerPrint); fresh != nil {
+		m = m.withSnapshot(fresh)
+	} else if m.snapshot == nil || m.snapshot.Status != managers.GameStatusFinished {
+		m.snapshot = nil
+	}
 	if m.snapshot == nil {
 		return m, m.gameJoinInput.Focus()
 	}
@@ -153,16 +160,13 @@ func joinRandomGameCmd(fingerprint string, tc managers.TimeControl) tea.Cmd {
 	}
 }
 
-// applyMoveCmd runs the manager-side move under the manager mutex, then
-// fans out the resulting snapshot to the opponent (if any) before
-// returning the local moveAppliedMsg. All of this happens in the cmd
-// goroutine — the bubbletea event loop only ever sees a single
-// moveAppliedMsg landing in Update().
+// applyMoveCmd runs the manager-side move under the manager mutex, notifies
+// the opponent, persists when the game ends, then returns moveAppliedMsg.
 func applyMoveCmd(fingerprint, move string) tea.Cmd {
 	return func() tea.Msg {
 		snap, err := gameManager.MakeMove(fingerprint, move)
 		if err == nil && snap != nil {
-			notifyOpponentMoved(snap, fingerprint, move)
+			finalizeGameAction(snap, fingerprint, move)
 		}
 		return moveAppliedMsg{snapshot: snap, move: move, err: err}
 	}
@@ -185,9 +189,19 @@ func applyMouseMoveCmd(fingerprint, move string) tea.Cmd {
 			}
 		}
 		if err == nil && snap != nil {
-			notifyOpponentMoved(snap, fingerprint, move)
+			finalizeGameAction(snap, fingerprint, move)
 		}
 		return moveAppliedMsg{snapshot: snap, move: move, err: err}
+	}
+}
+
+func resignGameCmd(fingerprint string) tea.Cmd {
+	return func() tea.Msg {
+		snap, err := gameManager.Resign(fingerprint)
+		if err == nil && snap != nil {
+			finalizeGameAction(snap, fingerprint, "")
+		}
+		return moveAppliedMsg{snapshot: snap, err: err}
 	}
 }
 
@@ -210,9 +224,8 @@ func notifyOpponentJoined(snap *managers.Snapshot, joinerFingerprint string) {
 	})
 }
 
-// notifyOpponentMoved sends the freshly-built post-move snapshot to the
-// opponent. The receiver replaces their snapshot wholesale, so the
-// opponent's board re-renders correctly without re-reading manager state.
+// notifyOpponentMoved pushes live game state to the other player's event
+// loop. The initiating player is updated via the cmd's return msg instead.
 func notifyOpponentMoved(snap *managers.Snapshot, moverFingerprint string, move string) {
 	oppFP := snap.OpponentFingerprint(moverFingerprint)
 	if oppFP == "" {
@@ -225,24 +238,21 @@ func notifyOpponentMoved(snap *managers.Snapshot, moverFingerprint string, move 
 	prog.Send(gameUpdatedMsg{move: move, snapshot: snap})
 }
 
-// persistAndRemoveGameCmd persists a finished game and clears it from
-// memory off the Bubble Tea event loop. The DB write happens in a
-// goroutine so Update() doesn't block waiting on Postgres. Returns a nil
-// msg because each affected player is notified via
-// prog.Send(gamesRefreshMsg{}) inside the goroutine (the fanout reaches
-// both players, not just the caller).
-func persistAndRemoveGameCmd(gameID string) tea.Cmd {
-	return func() tea.Msg {
-		record := gameManager.BuildGameRecord(gameID)
-		if err := dataManager.AddGame(record); err == nil {
-			gameManager.RemoveGame(gameID)
-			for _, fp := range []string{record.WhiteFingerprint, record.BlackFingerprint} {
-				if prog := sessionManager.GetProgram(fp); prog != nil {
-					prog.Send(gamesRefreshMsg{})
-				}
-			}
-		}
-		return nil
+// finalizeGameAction notifies the opponent of the new board state and
+// persists when the game has ended. Intro history refresh is triggered
+// locally by each player when they observe a finished snapshot — not here.
+func finalizeGameAction(snap *managers.Snapshot, actorFingerprint, move string) {
+	notifyOpponentMoved(snap, actorFingerprint, move)
+	if snap.Status == managers.GameStatusFinished {
+		persistFinishedGame(snap.ID)
+	}
+}
+
+// persistFinishedGame writes a finished game to the DB and removes it from memory.
+func persistFinishedGame(gameID string) {
+	record := gameManager.BuildGameRecord(gameID)
+	if err := dataManager.AddGame(record); err == nil {
+		gameManager.RemoveGame(gameID)
 	}
 }
 
@@ -485,6 +495,27 @@ func gameTurnLine(s *managers.Snapshot, fingerprint string) string {
 	return "You are " + colorName + ". " + s.Turn.Name() + " to move."
 }
 
+func gameResultLine(s *managers.Snapshot, fingerprint string) string {
+	if s == nil || s.Status != managers.GameStatusFinished {
+		return ""
+	}
+	color := s.PlayerColor(fingerprint)
+	if color == chess.NoColor {
+		return common.GameResultSummary(s.Outcome, s.Method, "")
+	}
+	return common.GameResultSummary(s.Outcome, s.Method, strings.ToLower(color.Name()))
+}
+
+func (m gameModel) clearFinishedGame() gameModel {
+	m.snapshot = nil
+	m.gameNotice = ""
+	m.selected = ""
+	m.possibleMoves = nil
+	m.movePending = false
+	m.moveInput.SetValue("")
+	return m
+}
+
 // --- Update -----------------------------------------------------------------
 
 // Update is the entry point for the game page. It first handles
@@ -512,13 +543,14 @@ func (m gameModel) Update(msg tea.Msg) (gameModel, tea.Cmd) {
 		if msg.snapshot != nil {
 			m = m.withSnapshot(msg.snapshot)
 		}
-		if msg.move != "" {
-			m.gameNotice = "Opponent played " + msg.move + "."
-		}
 		m.selected = ""
 		m.possibleMoves = nil
 		if m.snapshot != nil && m.snapshot.Status == managers.GameStatusFinished {
+			m.gameNotice = ""
 			return m, gamesRefreshCmd()
+		}
+		if msg.move != "" {
+			m.gameNotice = "Opponent played " + msg.move + "."
 		}
 		return m, nil
 	case ClockUpdateMsg:
@@ -537,11 +569,7 @@ func (m gameModel) Update(msg tea.Msg) (gameModel, tea.Cmd) {
 		m.movePending = false
 		m.selected = ""
 		m.possibleMoves = nil
-		if msg.LoserColor == chess.White {
-			m.gameNotice = "White ran out of time. Black wins!"
-		} else {
-			m.gameNotice = "Black ran out of time. White wins!"
-		}
+		m.gameNotice = ""
 		return m, gamesRefreshCmd()
 	case moveAppliedMsg:
 		return m.handleMoveApplied(msg)
@@ -588,15 +616,17 @@ func (m gameModel) handleLobbyResult(msg gameLobbyResultMsg) (gameModel, tea.Cmd
 	return m, nil
 }
 
-// handleMoveApplied is the convergence point for both keyboard-submitted
-// moves and mouse-submitted moves. The cmd has already pushed the move
-// through the manager and notified the opponent; here we just project the
-// new snapshot into the model and fire any follow-up cmd (game-end
-// persistence).
+// handleMoveApplied projects a moveAppliedMsg (move or resign) into the
+// model. The cmd has already applied the manager change, notified the
+// opponent, and persisted when the game ended.
 func (m gameModel) handleMoveApplied(msg moveAppliedMsg) (gameModel, tea.Cmd) {
 	m.movePending = false
 	if msg.err != nil {
-		m.gameNotice = "Move rejected: " + msg.err.Error()
+		if msg.move != "" {
+			m.gameNotice = "Move rejected: " + msg.err.Error()
+		} else {
+			m.gameNotice = msg.err.Error()
+		}
 		return m, nil
 	}
 	if msg.snapshot == nil {
@@ -604,12 +634,14 @@ func (m gameModel) handleMoveApplied(msg moveAppliedMsg) (gameModel, tea.Cmd) {
 	}
 	m = m.withSnapshot(msg.snapshot)
 	m.moveInput.SetValue("")
-	m.gameNotice = "Played " + msg.move + "."
 	m.selected = ""
 	m.possibleMoves = nil
-
 	if msg.snapshot.Status == managers.GameStatusFinished {
-		return m, persistAndRemoveGameCmd(msg.snapshot.ID)
+		m.gameNotice = ""
+		return m, gamesRefreshCmd()
+	}
+	if msg.move != "" {
+		m.gameNotice = "Played " + msg.move + "."
 	}
 	return m, nil
 }
@@ -683,6 +715,8 @@ func (m gameModel) updateGameInProgress(msg tea.Msg) (gameModel, tea.Cmd) {
 			m.selected = ""
 			m.possibleMoves = nil
 			return m, navigateToChatCmdGame()
+		case "ctrl+x":
+			return m, resignGameCmd(m.ctx.fingerPrint)
 		case "enter":
 			if m.movePending {
 				return m, nil
@@ -781,8 +815,22 @@ func legalMovesFromSquare(fen, from string) []string {
 
 // updateGameFinished handles input after the game ended.
 func (m gameModel) updateGameFinished(msg tea.Msg) (gameModel, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
-		return m, navigateToChatCmdGame()
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc":
+			m = m.clearFinishedGame()
+			return m, navigateToChatCmdGame()
+		case "ctrl+n":
+			tc := m.snapshot.TimeControl
+			m = m.clearFinishedGame()
+			m.selectedTimeControl = TimeControlChoice(tc)
+			return m, createGameCmd(m.ctx.fingerPrint, tc)
+		case "ctrl+r":
+			tc := m.snapshot.TimeControl
+			m = m.clearFinishedGame()
+			m.selectedTimeControl = TimeControlChoice(tc)
+			return m, joinRandomGameCmd(m.ctx.fingerPrint, tc)
+		}
 	}
 	return m, nil
 }
@@ -869,7 +917,7 @@ func (m gameModel) gameHeaderRows() []string {
 	if m.snapshot.TimeControl != 0 {
 		rows = append(rows, infoStyle.Render("Time control: ")+highlightStyle.Render(m.snapshot.TimeControl.String()))
 	}
-	if turnLine := gameTurnLine(m.snapshot, m.ctx.fingerPrint); turnLine != "" {
+	if turnLine := gameTurnLine(m.snapshot, m.ctx.fingerPrint); turnLine != "" && m.snapshot.Status != managers.GameStatusFinished {
 		rows = append(rows, highlightStyle.Render(turnLine))
 	}
 	if m.snapshot.Status == managers.GameStatusInProgress {
@@ -892,11 +940,19 @@ func (m gameModel) viewGameWaiting() string {
 
 func (m gameModel) viewGameInProgress() string {
 	helpStyle := m.ctx.renderer.NewStyle().Foreground(lipgloss.Color("241"))
-	rows := append(m.gameHeaderRows(), "", m.getGameBoard(), "", helpStyle.Render(gameHelpMove), m.moveInput.View())
+	rows := append(m.gameHeaderRows(), "", m.getGameBoard(), "", helpStyle.Render(gameHelpMove), helpStyle.Render(gameHelpResign), m.moveInput.View())
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
 func (m gameModel) viewGameFinished() string {
-	rows := append(m.gameHeaderRows(), "", m.getGameBoard())
+	r := m.ctx.renderer
+	helpStyle := r.NewStyle().Foreground(lipgloss.Color("241"))
+	resultStyle := r.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Bold(true).Padding(0, 1)
+
+	rows := append(m.gameHeaderRows(), "")
+	if result := gameResultLine(m.snapshot, m.ctx.fingerPrint); result != "" {
+		rows = append(rows, resultStyle.Render(result))
+	}
+	rows = append(rows, "", m.getGameBoard(), "", helpStyle.Render(gameHelpFinished))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }

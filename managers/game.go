@@ -456,6 +456,61 @@ func (gm *GameManager) MakeMove(fingerprint string, move string) (*Snapshot, err
 	return game.snapshot(), nil
 }
 
+// Resign ends the player's current game with them as the loser.
+func (gm *GameManager) Resign(fingerprint string) (*Snapshot, error) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+
+	player := gm.players[fingerprint]
+	if player == nil {
+		return nil, fmt.Errorf("player not found")
+	}
+	if player.currentGameId == "" {
+		return nil, fmt.Errorf("join a game first")
+	}
+
+	game := gm.games[player.currentGameId]
+	if game == nil {
+		return nil, fmt.Errorf("game not found")
+	}
+	if game.status != GameStatusInProgress {
+		return nil, fmt.Errorf("game is not in progress")
+	}
+
+	playerColor := chess.NoColor
+	if game.whitePlayer != nil && game.whitePlayer.fingerprint == fingerprint {
+		playerColor = chess.White
+	} else if game.blackPlayer != nil && game.blackPlayer.fingerprint == fingerprint {
+		playerColor = chess.Black
+	}
+	if playerColor == chess.NoColor {
+		return nil, fmt.Errorf("not a player in this game")
+	}
+
+	turn := chess.NoColor
+	if pos := game.game.Position(); pos != nil {
+		turn = pos.Turn()
+	}
+	if turn == playerColor && !game.turnStartedAt.IsZero() {
+		elapsed := time.Since(game.turnStartedAt)
+		if playerColor == chess.White {
+			game.whiteTimeLeft -= elapsed
+			if game.whiteTimeLeft < 0 {
+				game.whiteTimeLeft = 0
+			}
+		} else {
+			game.blackTimeLeft -= elapsed
+			if game.blackTimeLeft < 0 {
+				game.blackTimeLeft = 0
+			}
+		}
+	}
+
+	game.game.Resign(playerColor)
+	game.status = GameStatusFinished
+	return game.snapshot(), nil
+}
+
 // EndByTimeForfeit ends the named game by time forfeit and returns a
 // snapshot of the now-finished game. Returns nil if the game does not
 // exist or is no longer in progress (e.g. concurrently finished by a
@@ -489,7 +544,11 @@ func (gm *GameManager) EndByTimeForfeit(gameID string, loser chess.Color) *Snaps
 
 	game.status = GameStatusFinished
 	game.game.Resign(loser)
-	return game.snapshot()
+	snap := game.snapshot()
+	if snap != nil {
+		snap.Method = MethodTimeForfeit
+	}
+	return snap
 }
 
 func (gm *GameManager) PlayerUsername(fingerprint string) string {

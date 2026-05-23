@@ -91,6 +91,20 @@ func (g *BotGame) FEN() string {
 	return g.game.FEN()
 }
 
+func (g *BotGame) Outcome() string {
+	if g == nil || g.game == nil {
+		return ""
+	}
+	return string(g.game.Outcome())
+}
+
+func (g *BotGame) Method() string {
+	if g == nil || g.game == nil {
+		return ""
+	}
+	return g.game.Method().String()
+}
+
 // BotGameManager owns the lifecycle of bot games. It does not coordinate
 // with the multiplayer GameManager; a player can in principle have a bot
 // game and a multiplayer game at the same time, but in practice we only

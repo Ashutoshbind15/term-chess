@@ -20,7 +20,8 @@ const (
 	botHelpColors = "Select color: [w] white  [b] black  [r] random"
 	botHelpStart  = "Start a game: ctrl+n"
 	botHelpMove   = "Make a move: click a piece, then click its destination square."
-	botHelpResign = "Resign: ctrl+x"
+	botHelpResign   = "Resign: ctrl+x"
+	botHelpFinished = "Play again: ctrl+n   Bot lobby: esc"
 )
 
 type botMoveMsg struct {
@@ -115,6 +116,7 @@ func newBotModel(ctx *Context) botModel {
 func (m botModel) Init() tea.Cmd { return nil }
 
 func (m botModel) Activate() (botModel, tea.Cmd) {
+	m.botNotice = ""
 	m.botAPICheckInFlight = true
 	m.botAPIServiceReady = false
 	m.botAPIServiceErr = ""
@@ -198,6 +200,38 @@ func newBotGamesTable() table.Model {
 	)
 	t.SetStyles(viewOnlyTableStyles())
 	return t
+}
+
+func (m botModel) startBotRematch() (botModel, tea.Cmd) {
+	if m.currentBotGame == nil {
+		return m, nil
+	}
+	level := m.currentBotGame.BotLevel()
+	color := m.currentBotGame.PlayerColor()
+	if existing := botGameManager.GameForPlayer(m.ctx.fingerPrint); existing != nil {
+		botGameManager.RemoveBotGame(existing.ID())
+	}
+	m.currentBotGame = nil
+	m.selected = ""
+	m.possibleMoves = nil
+	m.botNotice = ""
+
+	username := ""
+	if m.ctx.player != nil {
+		username = m.ctx.player.Username
+	}
+	game, err := botGameManager.CreateBotGame(m.ctx.fingerPrint, username, color, level)
+	if err != nil {
+		m.botNotice = err.Error()
+		return m, nil
+	}
+	m.currentBotGame = game
+	m.botNotice = "Rematch on. You are " + strings.ToLower(game.PlayerColor().Name()) + " vs level " + strconv.Itoa(game.BotLevel()) + "."
+	if !game.IsPlayersTurn() {
+		m.botMoving = true
+		return m, requestBotMoveCmd(game.ID(), game.FEN(), game.BotLevel())
+	}
+	return m, nil
 }
 
 func (m botModel) startBotGamesLoad() (botModel, tea.Cmd) {
@@ -395,7 +429,7 @@ func (m botModel) updateBotInProgress(msg tea.Msg) (botModel, tea.Cmd) {
 				return m, nil
 			}
 			m.currentBotGame = game
-			m.botNotice = "You resigned."
+			m.botNotice = ""
 			return m, persistAndReloadBotGameCmd(game.ID(), m.ctx.fingerPrint)
 		}
 	}
@@ -403,12 +437,17 @@ func (m botModel) updateBotInProgress(msg tea.Msg) (botModel, tea.Cmd) {
 }
 
 func (m botModel) updateBotFinished(msg tea.Msg) (botModel, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
-		m.currentBotGame = nil
-		m.selected = ""
-		m.possibleMoves = nil
-		m.botNotice = ""
-		return m.startBotGamesLoad()
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc":
+			m.currentBotGame = nil
+			m.selected = ""
+			m.possibleMoves = nil
+			m.botNotice = ""
+			return m.startBotGamesLoad()
+		case "ctrl+n":
+			return m.startBotRematch()
+		}
 	}
 	return m, nil
 }
@@ -428,11 +467,11 @@ func (m botModel) handleBotMove(msg botMoveMsg) (botModel, tea.Cmd) {
 		return m, nil
 	}
 	m.currentBotGame = game
-	m.botNotice = "Bot played " + msg.move + "."
-
 	if game.Status() == managers.GameStatusFinished {
+		m.botNotice = ""
 		return m, persistAndReloadBotGameCmd(game.ID(), m.ctx.fingerPrint)
 	}
+	m.botNotice = "Bot played " + msg.move + "."
 	return m, nil
 }
 
@@ -448,13 +487,13 @@ func (m botModel) handleBotMoveApplied(msg botMoveAppliedMsg) (botModel, tea.Cmd
 		return m, nil
 	}
 	m.currentBotGame = msg.game
-	m.botNotice = "You played " + msg.move + "."
 	m.selected = ""
 	m.possibleMoves = nil
-
 	if msg.game.Status() == managers.GameStatusFinished {
+		m.botNotice = ""
 		return m, persistAndReloadBotGameCmd(msg.game.ID(), m.ctx.fingerPrint)
 	}
+	m.botNotice = "You played " + msg.move + "."
 
 	m.botMoving = true
 	return m, requestBotMoveCmd(msg.game.ID(), msg.game.FEN(), msg.game.BotLevel())
@@ -532,7 +571,7 @@ func botTurnLine(g *managers.BotGame, botMoving bool) string {
 	}
 	you := strings.ToLower(g.PlayerColor().Name())
 	if g.Status() != managers.GameStatusInProgress {
-		return "You are " + you + "."
+		return ""
 	}
 	if g.IsPlayersTurn() {
 		return "You are " + you + ". Your turn."
@@ -541,6 +580,13 @@ func botTurnLine(g *managers.BotGame, botMoving bool) string {
 		return "You are " + you + ". Bot is thinking..."
 	}
 	return "You are " + you + ". Bot to move."
+}
+
+func botResultLine(g *managers.BotGame) string {
+	if g == nil || g.Status() != managers.GameStatusFinished {
+		return ""
+	}
+	return common.GameResultSummary(g.Outcome(), g.Method(), strings.ToLower(g.PlayerColor().Name()))
 }
 
 func (m botModel) View() string {
@@ -663,7 +709,14 @@ func (m botModel) viewBotInProgress() string {
 }
 
 func (m botModel) viewBotFinished() string {
-	helpStyle := m.ctx.renderer.NewStyle().Foreground(lipgloss.Color("241"))
-	rows := append(m.botHeaderRows(), "", m.renderBotBoardFromFEN(), "", helpStyle.Render("Press esc to return to bot lobby."))
+	r := m.ctx.renderer
+	helpStyle := r.NewStyle().Foreground(lipgloss.Color("241"))
+	resultStyle := r.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Bold(true).Padding(0, 1)
+
+	rows := append(m.botHeaderRows(), "")
+	if result := botResultLine(m.currentBotGame); result != "" {
+		rows = append(rows, resultStyle.Render(result))
+	}
+	rows = append(rows, "", m.renderBotBoardFromFEN(), "", helpStyle.Render(botHelpFinished))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
