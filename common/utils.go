@@ -39,6 +39,34 @@ const (
 	HistoryToBorderColor   = "208" // orange — destination square
 )
 
+// BoardPieceMode controls how occupied squares are drawn on the board.
+type BoardPieceMode int
+
+const (
+	BoardPieceUnicode BoardPieceMode = iota // ♔♕♖… symbols
+	BoardPieceBare                          // FEN letters (K, q, …)
+)
+
+func (m BoardPieceMode) Toggle() BoardPieceMode {
+	if m == BoardPieceUnicode {
+		return BoardPieceBare
+	}
+	return BoardPieceUnicode
+}
+
+func (m BoardPieceMode) Label() string {
+	switch m {
+	case BoardPieceBare:
+		return "bare"
+	default:
+		return "unicode"
+	}
+}
+
+func PieceStyleHelpLine(mode BoardPieceMode) string {
+	return fmt.Sprintf("Piece style: ctrl+b · %s", mode.Label())
+}
+
 // BoardHistoryView describes the board position and move highlight for one
 // ply in the move list. Ply 0 is the starting position; ply N is after N
 // half-moves. When ply == len(moves) the live FEN from the server is used.

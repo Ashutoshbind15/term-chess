@@ -377,7 +377,11 @@ func parseBoardFENToString(fen string) [8][8]string {
 	return board
 }
 
-// Unicode chess symbols for the board
+func isWhitePiece(piece rune) bool {
+	return piece >= 'A' && piece <= 'Z'
+}
+
+// Unicode chess symbols for the board.
 func boardGlyph(piece rune) string {
 	if piece == 0 || piece == ' ' {
 		return " "
@@ -412,11 +416,30 @@ func boardGlyph(piece rune) string {
 	}
 }
 
+func renderBoardPiece(r *lipgloss.Renderer, piece rune, mode common.BoardPieceMode) string {
+	if piece == 0 || piece == ' ' {
+		return " "
+	}
+
+	var glyph string
+	switch mode {
+	case common.BoardPieceBare:
+		glyph = string(piece)
+	default:
+		glyph = boardGlyph(piece)
+	}
+
+	if isWhitePiece(piece) {
+		return r.NewStyle().Foreground(lipgloss.Color("255")).Bold(true).Render(glyph)
+	}
+	return r.NewStyle().Foreground(lipgloss.Color("245")).Render(glyph)
+}
+
 // renderChessBoard renders an 8x8 board from a FEN string with mouse-zone
 // markers so clicks can be mapped back to algebraic squares. It is shared
 // between the multiplayer and bot pages so the zone layout is guaranteed
 // to be identical for both.
-func renderChessBoard(r *lipgloss.Renderer, z *zone.Manager, fen string, colorIsWhite bool, selected string, possibleMoves []string, moveFrom, moveTo string) string {
+func renderChessBoard(r *lipgloss.Renderer, z *zone.Manager, fen string, colorIsWhite bool, selected string, possibleMoves []string, moveFrom, moveTo string, pieceMode common.BoardPieceMode) string {
 	board := parseBoardFENToString(fen)
 	flipped := !colorIsWhite
 
@@ -440,7 +463,7 @@ func renderChessBoard(r *lipgloss.Renderer, z *zone.Manager, fen string, colorIs
 			}
 
 			pos := convertToChessboardPosition(j, i, colorIsWhite)
-			glyph := boardGlyph(rune(board[sourceRow][sourceCol][0]))
+			glyph := renderBoardPiece(r, rune(board[sourceRow][sourceCol][0]), pieceMode)
 
 			var cell string
 			switch {
@@ -476,7 +499,7 @@ func (m gameModel) renderBoardFromFEN() string {
 		selected = ""
 		possible = nil
 	}
-	return renderChessBoard(m.ctx.renderer, m.ctx.zone, hv.FEN, colorIsWhite, selected, possible, hv.MoveFrom, hv.MoveTo)
+	return renderChessBoard(m.ctx.renderer, m.ctx.zone, hv.FEN, colorIsWhite, selected, possible, hv.MoveFrom, hv.MoveTo, m.ctx.pieceMode)
 }
 
 func containsSquare(squares []string, target string) bool {
@@ -1026,7 +1049,7 @@ func (m gameModel) viewGameInProgress() string {
 	helpStyle := m.ctx.renderer.NewStyle().Foreground(lipgloss.Color("241"))
 	rows := append(m.gameHeaderRows(), "")
 	rows = append(rows, m.gameBoardRows()...)
-	rows = append(rows, "", helpStyle.Render(gameHelpMove), helpStyle.Render(gameHelpHistory), helpStyle.Render(gameHelpResign), m.moveInput.View())
+	rows = append(rows, "", helpStyle.Render(gameHelpMove), helpStyle.Render(gameHelpHistory), helpStyle.Render(gameHelpResign), helpStyle.Render(common.PieceStyleHelpLine(m.ctx.pieceMode)), m.moveInput.View())
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
@@ -1041,6 +1064,6 @@ func (m gameModel) viewGameFinished() string {
 	}
 	rows = append(rows, "")
 	rows = append(rows, m.gameBoardRows()...)
-	rows = append(rows, "", helpStyle.Render(gameHelpHistory), helpStyle.Render(gameHelpFinished))
+	rows = append(rows, "", helpStyle.Render(gameHelpHistory), helpStyle.Render(gameHelpFinished), helpStyle.Render(common.PieceStyleHelpLine(m.ctx.pieceMode)))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }

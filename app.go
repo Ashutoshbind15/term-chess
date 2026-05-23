@@ -23,6 +23,7 @@ type Context struct {
 	player      *common.Player
 	width       int
 	height      int
+	pieceMode   common.BoardPieceMode
 }
 
 // navigateMsg is emitted by a child model to ask the root to switch pages.
@@ -160,6 +161,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.ctx.zone.Close()
 			}
 			return m, tea.Quit
+		case "ctrl+b":
+			m.ctx.pieceMode = m.ctx.pieceMode.Toggle()
+			return m, nil
 		case "tab":
 			if !m.introBusy() {
 				m = m.openPageSelect()

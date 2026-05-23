@@ -614,7 +614,7 @@ func (m botModel) renderBotBoardFromFEN() string {
 		selected = ""
 		possible = nil
 	}
-	return renderChessBoard(m.ctx.renderer, m.ctx.zone, hv.FEN, colorIsWhite, selected, possible, hv.MoveFrom, hv.MoveTo)
+	return renderChessBoard(m.ctx.renderer, m.ctx.zone, hv.FEN, colorIsWhite, selected, possible, hv.MoveFrom, hv.MoveTo, m.ctx.pieceMode)
 }
 
 func botStatusLine(g *managers.BotGame) string {
@@ -784,7 +784,7 @@ func (m botModel) viewBotInProgress() string {
 	helpStyle := m.ctx.renderer.NewStyle().Foreground(lipgloss.Color("241"))
 	rows := append(m.botHeaderRows(), "")
 	rows = append(rows, m.botBoardRows()...)
-	rows = append(rows, "", helpStyle.Render(botHelpMove), helpStyle.Render(botHelpHistory), helpStyle.Render(botHelpResign))
+	rows = append(rows, "", helpStyle.Render(botHelpMove), helpStyle.Render(botHelpHistory), helpStyle.Render(botHelpResign), helpStyle.Render(common.PieceStyleHelpLine(m.ctx.pieceMode)))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
@@ -799,6 +799,6 @@ func (m botModel) viewBotFinished() string {
 	}
 	rows = append(rows, "")
 	rows = append(rows, m.botBoardRows()...)
-	rows = append(rows, "", helpStyle.Render(botHelpHistory), helpStyle.Render(botHelpFinished))
+	rows = append(rows, "", helpStyle.Render(botHelpHistory), helpStyle.Render(botHelpFinished), helpStyle.Render(common.PieceStyleHelpLine(m.ctx.pieceMode)))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
