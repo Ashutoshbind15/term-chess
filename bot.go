@@ -19,7 +19,8 @@ const (
 	botHelpLevels = "Select level: [1] 1100  [3] 1300  [5] 1500  [7] 1700  [9] 1900"
 	botHelpColors = "Select color: [w] white  [b] black  [r] random"
 	botHelpStart  = "Start a game: ctrl+n"
-	botHelpMove   = "Make a move: click a piece, then click its destination square."
+	botHelpMove     = "Make a move: click a piece, then click its destination square."
+	botHelpHistory  = "Browse moves: ← previous   → next"
 	botHelpResign   = "Resign: ctrl+x"
 	botHelpFinished = "Play again: ctrl+n   Bot lobby: esc"
 )
@@ -74,6 +75,7 @@ type botModel struct {
 
 	selected      string
 	possibleMoves []string
+	historyPly    int
 
 	botGamesLoading bool
 	botGamesErr     string
@@ -104,13 +106,52 @@ func (m botModel) botPageKind() botPageKind {
 	}
 }
 
+func (m botModel) syncHistoryPly() botModel {
+	if m.currentBotGame != nil {
+		m.historyPly = len(m.currentBotGame.Moves())
+	} else {
+		m.historyPly = 0
+	}
+	return m
+}
+
+func (m botModel) viewingHistory() bool {
+	if m.currentBotGame == nil {
+		return false
+	}
+	return m.historyPly < len(m.currentBotGame.Moves())
+}
+
+func (m botModel) botBoardHistoryView() common.BoardHistoryView {
+	if m.currentBotGame == nil {
+		return common.BoardHistoryView{}
+	}
+	return common.BoardHistoryViewFor(m.currentBotGame.Moves(), m.currentBotGame.FEN(), m.historyPly)
+}
+
+func (m botModel) handleHistoryKeys(key tea.KeyMsg) (botModel, bool) {
+	if m.currentBotGame == nil {
+		return m, false
+	}
+	next, handled := common.AdjustHistoryPly(m.historyPly, len(m.currentBotGame.Moves()), key.String())
+	if !handled {
+		return m, false
+	}
+	if next != m.historyPly {
+		m.historyPly = next
+		m.selected = ""
+		m.possibleMoves = nil
+	}
+	return m, true
+}
+
 func newBotModel(ctx *Context) botModel {
 	return botModel{
 		ctx:            ctx,
 		currentBotGame: botGameManager.GameForPlayer(ctx.fingerPrint),
 		botGamesTable:  newBotGamesTable(),
 		botSpinner:     common.InitSpinner(),
-	}
+	}.syncHistoryPly()
 }
 
 func (m botModel) Init() tea.Cmd { return nil }
@@ -226,6 +267,7 @@ func (m botModel) startBotRematch() (botModel, tea.Cmd) {
 		return m, nil
 	}
 	m.currentBotGame = game
+	m = m.syncHistoryPly()
 	m.botNotice = "Rematch on. You are " + strings.ToLower(game.PlayerColor().Name()) + " vs level " + strconv.Itoa(game.BotLevel()) + "."
 	if !game.IsPlayersTurn() {
 		m.botMoving = true
@@ -392,6 +434,7 @@ func (m botModel) updateBotLobby(msg tea.Msg) (botModel, tea.Cmd) {
 				return m, nil
 			}
 			m.currentBotGame = game
+			m = m.syncHistoryPly()
 			m.botNotice = "Game on. You are " + strings.ToLower(game.PlayerColor().Name()) + " vs level " + strconv.Itoa(game.BotLevel()) + "."
 			m.selected = ""
 			m.possibleMoves = nil
@@ -412,11 +455,10 @@ func (m botModel) updateBotLobby(msg tea.Msg) (botModel, tea.Cmd) {
 // input on this page, which keeps the layout simple and avoids interfering
 // with bubblezone's column tracking.
 func (m botModel) updateBotInProgress(msg tea.Msg) (botModel, tea.Cmd) {
-	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
-		return m.handleBotBoardMouse(mouseMsg)
-	}
-
 	if key, ok := msg.(tea.KeyMsg); ok {
+		if handledModel, handled := m.handleHistoryKeys(key); handled {
+			return handledModel, nil
+		}
 		switch key.String() {
 		case "esc":
 			m.selected = ""
@@ -429,15 +471,27 @@ func (m botModel) updateBotInProgress(msg tea.Msg) (botModel, tea.Cmd) {
 				return m, nil
 			}
 			m.currentBotGame = game
+			m = m.syncHistoryPly()
 			m.botNotice = ""
 			return m, persistAndReloadBotGameCmd(game.ID(), m.ctx.fingerPrint)
 		}
+	}
+
+	if m.viewingHistory() {
+		return m, nil
+	}
+
+	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		return m.handleBotBoardMouse(mouseMsg)
 	}
 	return m, nil
 }
 
 func (m botModel) updateBotFinished(msg tea.Msg) (botModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
+		if handledModel, handled := m.handleHistoryKeys(key); handled {
+			return handledModel, nil
+		}
 		switch key.String() {
 		case "esc":
 			m.currentBotGame = nil
@@ -467,6 +521,7 @@ func (m botModel) handleBotMove(msg botMoveMsg) (botModel, tea.Cmd) {
 		return m, nil
 	}
 	m.currentBotGame = game
+	m = m.syncHistoryPly()
 	if game.Status() == managers.GameStatusFinished {
 		m.botNotice = ""
 		return m, persistAndReloadBotGameCmd(game.ID(), m.ctx.fingerPrint)
@@ -487,6 +542,7 @@ func (m botModel) handleBotMoveApplied(msg botMoveAppliedMsg) (botModel, tea.Cmd
 		return m, nil
 	}
 	m.currentBotGame = msg.game
+	m = m.syncHistoryPly()
 	m.selected = ""
 	m.possibleMoves = nil
 	if msg.game.Status() == managers.GameStatusFinished {
@@ -547,9 +603,18 @@ func (m botModel) handleBotBoardMouse(msg tea.MouseMsg) (botModel, tea.Cmd) {
 }
 
 func (m botModel) renderBotBoardFromFEN() string {
-	fen := m.currentBotGame.Game().FEN()
+	if m.currentBotGame == nil {
+		return gameNoGame
+	}
+	hv := m.botBoardHistoryView()
 	colorIsWhite := m.currentBotGame.PlayerColor() != chess.Black
-	return renderChessBoard(m.ctx.renderer, m.ctx.zone, fen, colorIsWhite, m.selected, m.possibleMoves)
+	selected := m.selected
+	possible := m.possibleMoves
+	if m.viewingHistory() {
+		selected = ""
+		possible = nil
+	}
+	return renderChessBoard(m.ctx.renderer, m.ctx.zone, hv.FEN, colorIsWhite, selected, possible, hv.MoveFrom, hv.MoveTo)
 }
 
 func botStatusLine(g *managers.BotGame) string {
@@ -702,9 +767,24 @@ func (m botModel) botHeaderRows() []string {
 	return rows
 }
 
+func (m botModel) botBoardRows() []string {
+	r := m.ctx.renderer
+	rows := []string{m.renderBotBoardFromFEN()}
+	if m.currentBotGame == nil {
+		return rows
+	}
+	if line := common.HistoryStatusLine(m.botBoardHistoryView()); line != "" {
+		historyStyle := r.NewStyle().Foreground(lipgloss.Color("245"))
+		rows = append(rows, historyStyle.Render(line))
+	}
+	return rows
+}
+
 func (m botModel) viewBotInProgress() string {
 	helpStyle := m.ctx.renderer.NewStyle().Foreground(lipgloss.Color("241"))
-	rows := append(m.botHeaderRows(), "", m.renderBotBoardFromFEN(), "", helpStyle.Render(botHelpMove), helpStyle.Render(botHelpResign))
+	rows := append(m.botHeaderRows(), "")
+	rows = append(rows, m.botBoardRows()...)
+	rows = append(rows, "", helpStyle.Render(botHelpMove), helpStyle.Render(botHelpHistory), helpStyle.Render(botHelpResign))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
@@ -717,6 +797,8 @@ func (m botModel) viewBotFinished() string {
 	if result := botResultLine(m.currentBotGame); result != "" {
 		rows = append(rows, resultStyle.Render(result))
 	}
-	rows = append(rows, "", m.renderBotBoardFromFEN(), "", helpStyle.Render(botHelpFinished))
+	rows = append(rows, "")
+	rows = append(rows, m.botBoardRows()...)
+	rows = append(rows, "", helpStyle.Render(botHelpHistory), helpStyle.Render(botHelpFinished))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }

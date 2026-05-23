@@ -21,6 +21,7 @@ const (
 	gameHelpJoinRandom = "Join a random game: ctrl+r"
 	gameHelpJoinByID   = "Join by code: type the 6-character game code below and press enter"
 	gameHelpMove       = "Make a move: click a piece then a square, or type UCI like e2e4"
+	gameHelpHistory    = "Browse moves: ← previous   → next"
 	gameHelpResign     = "Resign: ctrl+x"
 	gameHelpFinished   = "New game: ctrl+n   Join random: ctrl+r   Lobby: esc"
 	gameNoGame         = "No game"
@@ -47,6 +48,7 @@ type gameModel struct {
 	selected            string
 	possibleMoves       []string
 	movePending         bool
+	historyPly          int // half-move index being viewed; equals len(Moves) at live position
 }
 
 func newGameModel(ctx *Context) gameModel {
@@ -84,7 +86,46 @@ func (m gameModel) withSnapshot(s *managers.Snapshot) gameModel {
 		m.whiteTimeLeft = s.WhiteTimeLeft
 		m.blackTimeLeft = s.BlackTimeLeft
 	}
+	return m.syncHistoryPly()
+}
+
+func (m gameModel) syncHistoryPly() gameModel {
+	if m.snapshot != nil {
+		m.historyPly = len(m.snapshot.Moves)
+	} else {
+		m.historyPly = 0
+	}
 	return m
+}
+
+func (m gameModel) viewingHistory() bool {
+	if m.snapshot == nil {
+		return false
+	}
+	return m.historyPly < len(m.snapshot.Moves)
+}
+
+func (m gameModel) boardHistoryView() common.BoardHistoryView {
+	if m.snapshot == nil {
+		return common.BoardHistoryView{}
+	}
+	return common.BoardHistoryViewFor(m.snapshot.Moves, m.snapshot.FEN, m.historyPly)
+}
+
+func (m gameModel) handleHistoryKeys(key tea.KeyMsg) (gameModel, bool) {
+	if m.snapshot == nil {
+		return m, false
+	}
+	next, handled := common.AdjustHistoryPly(m.historyPly, len(m.snapshot.Moves), key.String())
+	if !handled {
+		return m, false
+	}
+	if next != m.historyPly {
+		m.historyPly = next
+		m.selected = ""
+		m.possibleMoves = nil
+	}
+	return m, true
 }
 
 func (m gameModel) Activate() (gameModel, tea.Cmd) {
@@ -375,7 +416,7 @@ func boardGlyph(piece rune) string {
 // markers so clicks can be mapped back to algebraic squares. It is shared
 // between the multiplayer and bot pages so the zone layout is guaranteed
 // to be identical for both.
-func renderChessBoard(r *lipgloss.Renderer, z *zone.Manager, fen string, colorIsWhite bool, selected string, possibleMoves []string) string {
+func renderChessBoard(r *lipgloss.Renderer, z *zone.Manager, fen string, colorIsWhite bool, selected string, possibleMoves []string, moveFrom, moveTo string) string {
 	board := parseBoardFENToString(fen)
 	flipped := !colorIsWhite
 
@@ -402,11 +443,16 @@ func renderChessBoard(r *lipgloss.Renderer, z *zone.Manager, fen string, colorIs
 			glyph := boardGlyph(rune(board[sourceRow][sourceCol][0]))
 
 			var cell string
-			if selected == pos {
+			switch {
+			case selected == pos:
 				cell = cellStyle.Copy().BorderForeground(lipgloss.Color("190")).Render(glyph)
-			} else if containsSquare(possibleMoves, pos) {
+			case containsSquare(possibleMoves, pos):
 				cell = cellStyle.Copy().BorderForeground(lipgloss.Color("229")).Render(glyph)
-			} else {
+			case moveFrom != "" && pos == moveFrom:
+				cell = cellStyle.Copy().BorderForeground(lipgloss.Color(common.HistoryFromBorderColor)).Render(glyph)
+			case moveTo != "" && pos == moveTo:
+				cell = cellStyle.Copy().BorderForeground(lipgloss.Color(common.HistoryToBorderColor)).Render(glyph)
+			default:
 				cell = cellStyle.Render(glyph)
 			}
 
@@ -419,9 +465,18 @@ func renderChessBoard(r *lipgloss.Renderer, z *zone.Manager, fen string, colorIs
 }
 
 func (m gameModel) renderBoardFromFEN() string {
-	fen := m.snapshot.FEN
+	if m.snapshot == nil || m.snapshot.FEN == "" {
+		return gameNoGame
+	}
+	hv := m.boardHistoryView()
 	colorIsWhite := m.snapshot.PlayerColor(m.ctx.fingerPrint) != chess.Black
-	return renderChessBoard(m.ctx.renderer, m.ctx.zone, fen, colorIsWhite, m.selected, m.possibleMoves)
+	selected := m.selected
+	possible := m.possibleMoves
+	if m.viewingHistory() {
+		selected = ""
+		possible = nil
+	}
+	return renderChessBoard(m.ctx.renderer, m.ctx.zone, hv.FEN, colorIsWhite, selected, possible, hv.MoveFrom, hv.MoveTo)
 }
 
 func containsSquare(squares []string, target string) bool {
@@ -512,6 +567,7 @@ func (m gameModel) clearFinishedGame() gameModel {
 	m.selected = ""
 	m.possibleMoves = nil
 	m.movePending = false
+	m.historyPly = 0
 	m.moveInput.SetValue("")
 	return m
 }
@@ -705,11 +761,10 @@ func (m gameModel) updateGameWaiting(msg tea.Msg) (gameModel, tea.Cmd) {
 // movePending acts as UI-level backpressure: a second submission while
 // the first is still in flight is dropped so we never queue two moves.
 func (m gameModel) updateGameInProgress(msg tea.Msg) (gameModel, tea.Cmd) {
-	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
-		return m.handleBoardMouse(mouseMsg)
-	}
-
 	if key, ok := msg.(tea.KeyMsg); ok {
+		if handledModel, handled := m.handleHistoryKeys(key); handled {
+			return handledModel, nil
+		}
 		switch key.String() {
 		case "esc":
 			m.selected = ""
@@ -717,6 +772,19 @@ func (m gameModel) updateGameInProgress(msg tea.Msg) (gameModel, tea.Cmd) {
 			return m, navigateToChatCmdGame()
 		case "ctrl+x":
 			return m, resignGameCmd(m.ctx.fingerPrint)
+		}
+	}
+
+	if m.viewingHistory() {
+		return m, nil
+	}
+
+	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		return m.handleBoardMouse(mouseMsg)
+	}
+
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
 		case "enter":
 			if m.movePending {
 				return m, nil
@@ -816,6 +884,9 @@ func legalMovesFromSquare(fen, from string) []string {
 // updateGameFinished handles input after the game ended.
 func (m gameModel) updateGameFinished(msg tea.Msg) (gameModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
+		if handledModel, handled := m.handleHistoryKeys(key); handled {
+			return handledModel, nil
+		}
 		switch key.String() {
 		case "esc":
 			m = m.clearFinishedGame()
@@ -932,6 +1003,19 @@ func (m gameModel) gameHeaderRows() []string {
 	return rows
 }
 
+func (m gameModel) gameBoardRows() []string {
+	r := m.ctx.renderer
+	rows := []string{m.getGameBoard()}
+	if m.snapshot == nil {
+		return rows
+	}
+	if line := common.HistoryStatusLine(m.boardHistoryView()); line != "" {
+		historyStyle := r.NewStyle().Foreground(lipgloss.Color("245"))
+		rows = append(rows, historyStyle.Render(line))
+	}
+	return rows
+}
+
 func (m gameModel) viewGameWaiting() string {
 	helpStyle := m.ctx.renderer.NewStyle().Foreground(lipgloss.Color("241"))
 	rows := append(m.gameHeaderRows(), "", m.getGameBoard(), "", helpStyle.Render("Waiting for an opponent. Share the game ID above."))
@@ -940,7 +1024,9 @@ func (m gameModel) viewGameWaiting() string {
 
 func (m gameModel) viewGameInProgress() string {
 	helpStyle := m.ctx.renderer.NewStyle().Foreground(lipgloss.Color("241"))
-	rows := append(m.gameHeaderRows(), "", m.getGameBoard(), "", helpStyle.Render(gameHelpMove), helpStyle.Render(gameHelpResign), m.moveInput.View())
+	rows := append(m.gameHeaderRows(), "")
+	rows = append(rows, m.gameBoardRows()...)
+	rows = append(rows, "", helpStyle.Render(gameHelpMove), helpStyle.Render(gameHelpHistory), helpStyle.Render(gameHelpResign), m.moveInput.View())
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
@@ -953,6 +1039,8 @@ func (m gameModel) viewGameFinished() string {
 	if result := gameResultLine(m.snapshot, m.ctx.fingerPrint); result != "" {
 		rows = append(rows, resultStyle.Render(result))
 	}
-	rows = append(rows, "", m.getGameBoard(), "", helpStyle.Render(gameHelpFinished))
+	rows = append(rows, "")
+	rows = append(rows, m.gameBoardRows()...)
+	rows = append(rows, "", helpStyle.Render(gameHelpHistory), helpStyle.Render(gameHelpFinished))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }

@@ -91,6 +91,19 @@ func (g *BotGame) FEN() string {
 	return g.game.FEN()
 }
 
+// Moves returns played moves as UCI strings in order.
+func (g *BotGame) Moves() []string {
+	if g == nil || g.game == nil {
+		return nil
+	}
+	moves := g.game.Moves()
+	out := make([]string, len(moves))
+	for i, move := range moves {
+		out[i] = move.String()
+	}
+	return out
+}
+
 func (g *BotGame) Outcome() string {
 	if g == nil || g.game == nil {
 		return ""

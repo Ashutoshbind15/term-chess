@@ -78,6 +78,7 @@ type Snapshot struct {
 	ID               string // internal UUID
 	Code             string // short display code (e.g. "XK9Z46")
 	FEN              string
+	Moves            []string // UCI moves in order (e.g. "e2e4")
 	PGN              string
 	Status           string
 	Turn             chess.Color
@@ -154,6 +155,9 @@ func (g *Game) snapshot() *Snapshot {
 		s.PGN = g.game.String()
 		s.Outcome = string(g.game.Outcome())
 		s.Method = g.game.Method().String()
+		for _, move := range g.game.Moves() {
+			s.Moves = append(s.Moves, move.String())
+		}
 		if pos := g.game.Position(); pos != nil {
 			s.Turn = pos.Turn()
 		}
