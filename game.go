@@ -423,6 +423,50 @@ func containsSquare(squares []string, target string) bool {
 	return false
 }
 
+func pieceAtSquare(fen, square string) (rune, bool) {
+	if len(square) != 2 {
+		return 0, false
+	}
+	file := int(square[0] - 'a')
+	rank := int(square[1] - '1')
+	if file < 0 || file > 7 || rank < 0 || rank > 7 {
+		return 0, false
+	}
+	board := parseBoardFENToString(fen)
+	piece := board[7-rank][file]
+	if piece == " " || piece == "" {
+		return 0, false
+	}
+	return rune(piece[0]), true
+}
+
+func isOwnPiece(piece rune, color chess.Color) bool {
+	if color == chess.White {
+		return piece >= 'A' && piece <= 'Z'
+	}
+	return piece >= 'a' && piece <= 'z'
+}
+
+// boardClickResult interprets a square click when a piece may already be
+// selected. It returns a move to play, or updated selection state. Clicks on
+// another own piece reselect without submitting a move; clicks on empty or
+// invalid squares clear the selection.
+func boardClickResult(fen, pos, selected string, possibleMoves []string, playerColor chess.Color) (newSelected string, newPossibleMoves []string, moveUCI string) {
+	if selected == "" {
+		return pos, legalMovesFromSquare(fen, pos), ""
+	}
+	if containsSquare(possibleMoves, pos) {
+		return "", nil, selected + pos
+	}
+	if pos == selected {
+		return "", nil, ""
+	}
+	if piece, ok := pieceAtSquare(fen, pos); ok && isOwnPiece(piece, playerColor) {
+		return pos, legalMovesFromSquare(fen, pos), ""
+	}
+	return "", nil, ""
+}
+
 func gameTurnLine(s *managers.Snapshot, fingerprint string) string {
 	if s == nil {
 		return ""
@@ -673,6 +717,7 @@ func (m gameModel) handleBoardMouse(msg tea.MouseMsg) (gameModel, tea.Cmd) {
 	}
 
 	colorIsWhite := m.snapshot.PlayerColor(m.ctx.fingerPrint) == chess.White
+	playerColor := m.snapshot.PlayerColor(m.ctx.fingerPrint)
 	doesClick := false
 
 	for i := 0; i < 8; i++ {
@@ -683,17 +728,16 @@ func (m gameModel) handleBoardMouse(msg tea.MouseMsg) (gameModel, tea.Cmd) {
 			}
 			doesClick = true
 
-			if m.selected == "" {
-				m.selected = pos
-				m.possibleMoves = legalMovesFromSquare(m.snapshot.FEN, pos)
-				return m, nil
+			selected, possibleMoves, moveUCI := boardClickResult(m.snapshot.FEN, pos, m.selected, m.possibleMoves, playerColor)
+			if moveUCI != "" {
+				m.selected = ""
+				m.possibleMoves = nil
+				m.movePending = true
+				return m, applyMouseMoveCmd(m.ctx.fingerPrint, moveUCI)
 			}
-
-			moveUCI := m.selected + pos
-			m.selected = ""
-			m.possibleMoves = nil
-			m.movePending = true
-			return m, applyMouseMoveCmd(m.ctx.fingerPrint, moveUCI)
+			m.selected = selected
+			m.possibleMoves = possibleMoves
+			return m, nil
 		}
 	}
 

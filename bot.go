@@ -29,6 +29,13 @@ type botMoveMsg struct {
 	err    error
 }
 
+// botMoveAppliedMsg is the response to a MakePlayerMove call from a mouse click.
+type botMoveAppliedMsg struct {
+	game *managers.BotGame
+	move string
+	err  error
+}
+
 type botAPIHealthMsg struct {
 	err error
 }
@@ -61,6 +68,7 @@ type botModel struct {
 	botSelectedColor chess.Color
 	botNotice        string
 	botMoving        bool
+	botMovePending   bool
 	botSpinner       spinner.Model
 
 	selected      string
@@ -135,6 +143,23 @@ func requestBotMoveCmd(gameID, fen string, level int) tea.Cmd {
 	return func() tea.Msg {
 		move, err := botAPIManager.BestMove(fen, level)
 		return botMoveMsg{gameID: gameID, move: move, err: err}
+	}
+}
+
+// applyBotMouseMoveCmd is the mouse-click variant for bot games. Like PvP,
+// manager work runs in the cmd goroutine and lands as botMoveAppliedMsg in
+// Update().
+func applyBotMouseMoveCmd(fingerprint, move string) tea.Cmd {
+	return func() tea.Msg {
+		game, err := botGameManager.MakePlayerMove(fingerprint, move)
+		if err != nil {
+			if game2, err2 := botGameManager.MakePlayerMove(fingerprint, move+"q"); err2 == nil {
+				game = game2
+				move += "q"
+				err = nil
+			}
+		}
+		return botMoveAppliedMsg{game: game, move: move, err: err}
 	}
 }
 
@@ -277,6 +302,8 @@ func (m botModel) Update(msg tea.Msg) (botModel, tea.Cmd) {
 		return m, nil
 	case botMoveMsg:
 		return m.handleBotMove(msg)
+	case botMoveAppliedMsg:
+		return m.handleBotMoveApplied(msg)
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.botSpinner, cmd = m.botSpinner.Update(msg)
@@ -423,11 +450,35 @@ func (m botModel) handleBotMove(msg botMoveMsg) (botModel, tea.Cmd) {
 	return m, nil
 }
 
+func (m botModel) handleBotMoveApplied(msg botMoveAppliedMsg) (botModel, tea.Cmd) {
+	m.botMovePending = false
+	if msg.err != nil {
+		m.botNotice = "Move rejected: " + msg.err.Error()
+		m.selected = ""
+		m.possibleMoves = nil
+		return m, nil
+	}
+	if msg.game == nil {
+		return m, nil
+	}
+	m.currentBotGame = msg.game
+	m.botNotice = "You played " + msg.move + "."
+	m.selected = ""
+	m.possibleMoves = nil
+
+	if msg.game.Status() == managers.GameStatusFinished {
+		return m, persistAndReloadBotGameCmd(msg.game.ID(), m.ctx.fingerPrint)
+	}
+
+	m.botMoving = true
+	return m, requestBotMoveCmd(msg.game.ID(), msg.game.FEN(), msg.game.BotLevel())
+}
+
 func (m botModel) handleBotBoardMouse(msg tea.MouseMsg) (botModel, tea.Cmd) {
 	if msg.Action != tea.MouseActionRelease || msg.Button != tea.MouseButtonLeft {
 		return m, nil
 	}
-	if m.botMoving {
+	if m.botMoving || m.botMovePending {
 		return m, nil
 	}
 	if !m.currentBotGame.IsPlayersTurn() {
@@ -437,68 +488,28 @@ func (m botModel) handleBotBoardMouse(msg tea.MouseMsg) (botModel, tea.Cmd) {
 	}
 
 	colorIsWhite := m.currentBotGame.PlayerColor() == chess.White
+	playerColor := m.currentBotGame.PlayerColor()
 	doesClick := false
 
 	for i := 0; i < 8; i++ {
 		for j := 0; j < 8; j++ {
 			pos := convertToChessboardPosition(j, i, colorIsWhite)
-			if m.ctx.zone.Get(pos).InBounds(msg) {
-				doesClick = true
-
-				if m.selected == "" {
-					m.selected = pos
-					fenOpt, err := chess.FEN(m.currentBotGame.Game().FEN())
-					if err != nil {
-						return m, nil
-					}
-					clientChessClient := chess.NewGame(chess.UseNotation(chess.UCINotation{}), fenOpt)
-					possibleMoves := clientChessClient.ValidMoves()
-
-					validMovesFromSelected := []string{}
-					for _, mv := range possibleMoves {
-						moveStr := mv.String()
-						moveStrStart := moveStr[:2]
-						moveStrEnd := moveStr[2:]
-						if moveStrStart == m.selected {
-							if len(moveStrEnd) == 3 {
-								validMovesFromSelected = append(validMovesFromSelected, moveStrEnd[:2])
-							} else {
-								validMovesFromSelected = append(validMovesFromSelected, moveStrEnd)
-							}
-						}
-					}
-					m.possibleMoves = validMovesFromSelected
-				} else {
-					moveUCI := m.selected + pos
-					game, err := botGameManager.MakePlayerMove(m.ctx.fingerPrint, moveUCI)
-					if err != nil {
-						game2, perr := botGameManager.MakePlayerMove(m.ctx.fingerPrint, moveUCI+"q")
-						if perr != nil {
-							m.botNotice = "Move rejected: " + err.Error()
-						} else {
-							game = game2
-							moveUCI += "q"
-						}
-					}
-
-					m.selected = ""
-					m.possibleMoves = nil
-
-					if game == nil {
-						return m, nil
-					}
-
-					m.currentBotGame = game
-					m.botNotice = "You played " + moveUCI + "."
-
-					if game.Status() == managers.GameStatusFinished {
-						return m, persistAndReloadBotGameCmd(game.ID(), m.ctx.fingerPrint)
-					}
-
-					m.botMoving = true
-					return m, requestBotMoveCmd(game.ID(), game.FEN(), game.BotLevel())
-				}
+			if !m.ctx.zone.Get(pos).InBounds(msg) {
+				continue
 			}
+			doesClick = true
+
+			selected, possibleMoves, moveUCI := boardClickResult(m.currentBotGame.Game().FEN(), pos, m.selected, m.possibleMoves, playerColor)
+			if moveUCI != "" {
+				m.selected = ""
+				m.possibleMoves = nil
+				m.botMovePending = true
+				return m, applyBotMouseMoveCmd(m.ctx.fingerPrint, moveUCI)
+			}
+
+			m.selected = selected
+			m.possibleMoves = possibleMoves
+			return m, nil
 		}
 	}
 
