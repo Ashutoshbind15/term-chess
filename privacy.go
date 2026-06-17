@@ -60,6 +60,7 @@ func deletePlayerDataCmd(fingerprint string) tea.Cmd {
 		}
 
 		gameManager.RemovePlayer(fingerprint)
+		botGameManager.RemovePlayer(fingerprint)
 		return deletePlayerDataMsg{ok: true}
 	}
 }
@@ -145,7 +146,8 @@ func (m privacyModel) View() string {
 		mutedStyle.Render("  • your profile and generated display name"),
 		mutedStyle.Render("  • your bot game history"),
 		mutedStyle.Render("  • your fingerprint and username in stored multiplayer games"),
-		mutedStyle.Render("    (opponents keep their game history; your side is anonymized)"),
+		mutedStyle.Render("    (your display name becomes \"deleteduser\"; opponents keep"),
+		mutedStyle.Render("    the game until both sides have deleted, then it is removed)"),
 		"",
 	}
 

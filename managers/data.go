@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/Ashutoshbind15/ssh-chess/common"
@@ -56,7 +57,62 @@ func (dm *DataManager) AddPlayer(player common.Player) error {
 	return dm.db.Create(&player).Error
 }
 
-const deletedPlayerUsername = "[deleted]"
+const deletedPlayerUsername = "deleteduser"
+
+func anonymizePGNTag(pgn, tag string) string {
+	if strings.TrimSpace(pgn) == "" {
+		return pgn
+	}
+	re := regexp.MustCompile(`(?i)\[` + tag + `\s+"[^"]*"\]`)
+	return re.ReplaceAllString(pgn, `[`+tag+` "`+deletedPlayerUsername+`"]`)
+}
+
+func anonymizeMultiplayerGames(tx *gorm.DB, fingerprint string) error {
+	var games []common.Game
+	if err := tx.
+		Where("white_fingerprint = ? OR black_fingerprint = ?", fingerprint, fingerprint).
+		Find(&games).Error; err != nil {
+		return err
+	}
+
+	var removeIDs []uint
+	for _, g := range games {
+		opponentAlreadyDeleted :=
+			(g.WhiteFingerprint == fingerprint && g.BlackUsername == deletedPlayerUsername) ||
+				(g.BlackFingerprint == fingerprint && g.WhiteUsername == deletedPlayerUsername)
+		if opponentAlreadyDeleted {
+			removeIDs = append(removeIDs, g.ID)
+			continue
+		}
+
+		updates := map[string]any{}
+		pgn := g.PGN
+
+		if g.WhiteFingerprint == fingerprint {
+			updates["white_fingerprint"] = ""
+			updates["white_username"] = deletedPlayerUsername
+			pgn = anonymizePGNTag(pgn, "White")
+		}
+		if g.BlackFingerprint == fingerprint {
+			updates["black_fingerprint"] = ""
+			updates["black_username"] = deletedPlayerUsername
+			pgn = anonymizePGNTag(pgn, "Black")
+		}
+		if len(updates) == 0 {
+			continue
+		}
+		updates["pgn"] = pgn
+
+		if err := tx.Model(&common.Game{}).Where("id = ?", g.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+	}
+
+	if len(removeIDs) == 0 {
+		return nil
+	}
+	return tx.Unscoped().Where("id IN ?", removeIDs).Delete(&common.Game{}).Error
+}
 
 // DeletePlayerData removes the player profile and bot games, and anonymizes
 // the player's side of stored multiplayer game records.
@@ -66,29 +122,19 @@ func (dm *DataManager) DeletePlayerData(fingerprint string) error {
 	}
 
 	return dm.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("player_fingerprint = ?", fingerprint).Delete(&common.BotGame{}).Error; err != nil {
+		if err := tx.Unscoped().
+			Where("player_fingerprint = ?", fingerprint).
+			Delete(&common.BotGame{}).Error; err != nil {
 			return err
 		}
 
-		if err := tx.Model(&common.Game{}).
-			Where("white_fingerprint = ?", fingerprint).
-			Updates(map[string]any{
-				"white_fingerprint": "",
-				"white_username":    deletedPlayerUsername,
-			}).Error; err != nil {
+		if err := anonymizeMultiplayerGames(tx, fingerprint); err != nil {
 			return err
 		}
 
-		if err := tx.Model(&common.Game{}).
-			Where("black_fingerprint = ?", fingerprint).
-			Updates(map[string]any{
-				"black_fingerprint": "",
-				"black_username":    deletedPlayerUsername,
-			}).Error; err != nil {
-			return err
-		}
-
-		return tx.Where("fingerprint = ?", fingerprint).Delete(&common.Player{}).Error
+		return tx.Unscoped().
+			Where("fingerprint = ?", fingerprint).
+			Delete(&common.Player{}).Error
 	})
 }
 

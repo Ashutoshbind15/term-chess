@@ -200,6 +200,18 @@ func (bm *BotGameManager) IsPlayerBusy(fingerprint string) bool {
 	return bm.playerGames[fingerprint] != ""
 }
 
+func (bm *BotGameManager) RemovePlayer(fingerprint string) {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+
+	id := bm.playerGames[fingerprint]
+	if id == "" {
+		return
+	}
+	delete(bm.playerGames, fingerprint)
+	delete(bm.games, id)
+}
+
 // MakePlayerMove validates and applies a player move. Returns the updated
 // game, or an error if the move is illegal / not the player's turn.
 func (bm *BotGameManager) MakePlayerMove(fingerprint, move string) (*BotGame, error) {
