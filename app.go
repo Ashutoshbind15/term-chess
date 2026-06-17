@@ -46,7 +46,6 @@ type appModel struct {
 	previousPage *Page
 
 	intro introModel
-	chat  chatModel
 	menu  menuModel
 	game  gameModel
 	bot   botModel
@@ -93,17 +92,10 @@ func (m appModel) effectivePage() Page {
 func (m appModel) navigateTo(page Page) (appModel, tea.Cmd) {
 	// todo: add a toast or some sort of feedback for
 	// an unexpected action
-	if (page == PageChat || page == PageGame || page == PageBot) && m.ctx.player == nil {
+	if (page == PageGame || page == PageBot) && m.ctx.player == nil {
 		page = PageIntro
 	}
 	var cmds []tea.Cmd
-	if m.effectivePage() == PageChat && page != PageChat {
-		var cmd tea.Cmd
-		m.chat, cmd = m.chat.Deactivate()
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	}
 	m.page = page
 	m.previousPage = nil
 	var activateCmd tea.Cmd
@@ -119,10 +111,6 @@ func (m appModel) activateCurrentPage() (appModel, tea.Cmd) {
 	case PageIntro:
 		var cmd tea.Cmd
 		m.intro, cmd = m.intro.Activate()
-		return m, cmd
-	case PageChat:
-		var cmd tea.Cmd
-		m.chat, cmd = m.chat.Activate()
 		return m, cmd
 	case PageGame:
 		var cmd tea.Cmd
@@ -186,14 +174,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.bot, cmd = m.bot.Update(msg)
 		return m, cmd
-	case message:
-		var cmd tea.Cmd
-		m.chat, cmd = m.chat.Update(msg)
-		return m, cmd
-	case presenceMsg:
-		var cmd tea.Cmd
-		m.chat, cmd = m.chat.Update(msg)
-		return m, cmd
 	}
 
 	// Route to page-specific update handlers
@@ -201,10 +181,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PageIntro:
 		var cmd tea.Cmd
 		m.intro, cmd = m.intro.Update(msg)
-		return m, cmd
-	case PageChat:
-		var cmd tea.Cmd
-		m.chat, cmd = m.chat.Update(msg)
 		return m, cmd
 	case PageSelect:
 		var cmd tea.Cmd
@@ -251,8 +227,6 @@ func (m appModel) View() string {
 	switch m.page {
 	case PageIntro:
 		pageContent = m.intro.View()
-	case PageChat:
-		pageContent = m.chat.View()
 	case PageSelect:
 		pageContent = m.menu.View()
 	case PageGame:

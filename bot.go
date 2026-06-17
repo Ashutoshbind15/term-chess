@@ -171,8 +171,8 @@ func checkBotAPIServiceCmd() tea.Cmd {
 	}
 }
 
-func navigateToChatCmdBot() tea.Cmd {
-	return func() tea.Msg { return navigateMsg{page: PageChat} }
+func navigateToGameLobbyCmdBot() tea.Cmd {
+	return func() tea.Msg { return navigateMsg{page: PageGame} }
 }
 
 func loadBotGamesCmd(fingerprint string) tea.Cmd {
@@ -308,7 +308,7 @@ func (m botModel) updateBotHealthChecking(msg tea.Msg) (botModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
 		m.botAPICheckInFlight = false
 		m.botAPIServiceErr = ""
-		return m, navigateToChatCmdBot()
+		return m, navigateToGameLobbyCmdBot()
 	}
 	return m, nil
 }
@@ -320,7 +320,7 @@ func (m botModel) updateBotHealthFailed(msg tea.Msg) (botModel, tea.Cmd) {
 		case "esc":
 			m.botAPICheckInFlight = false
 			m.botAPIServiceErr = ""
-			return m, navigateToChatCmdBot()
+			return m, navigateToGameLobbyCmdBot()
 		case "ctrl+r":
 			m.botAPICheckInFlight = true
 			m.botAPIServiceErr = ""
@@ -394,7 +394,7 @@ func (m botModel) updateBotLobby(msg tea.Msg) (botModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "esc":
-			return m, navigateToChatCmdBot()
+			return m, navigateToGameLobbyCmdBot()
 		case "1":
 			m.botSelectedLevel = 1100
 			return m, nil
@@ -463,7 +463,7 @@ func (m botModel) updateBotInProgress(msg tea.Msg) (botModel, tea.Cmd) {
 		case "esc":
 			m.selected = ""
 			m.possibleMoves = nil
-			return m, navigateToChatCmdBot()
+			return m, navigateToGameLobbyCmdBot()
 		case "ctrl+x":
 			game, err := botGameManager.Resign(m.ctx.fingerPrint)
 			if err != nil {

@@ -1,6 +1,6 @@
 # Term Chess
 
-Term Chess is an SSH-native terminal chess server built in Go. Players connect over SSH, land directly inside a Bubble Tea interface, create time-controlled multiplayer games, chat in the lobby, or play untimed bot matches backed by [`elo-based-rec`](https://github.com/Ashutoshbind15/elo-based-rec).
+Term Chess is an SSH-native terminal chess server built in Go. Players connect over SSH, land directly inside a Bubble Tea interface, create time-controlled multiplayer games, or play untimed bot matches backed by [`elo-based-rec`](https://github.com/Ashutoshbind15/elo-based-rec).
 
 
 
@@ -11,10 +11,9 @@ https://github.com/user-attachments/assets/fa54412a-5fb7-4ed3-9b15-69c7f5b00817
 ## Features
 
 - SSH-hosted terminal UI built with `Wish` + `Bubble Tea`
-- Fingerprint-based player identity per SSH client
+- Fingerprint-based player identity with auto-assigned pet names
 - Multiplayer chess with 1, 3, and 5 minute time controls
 - Live clock updates and time-forfeit handling
-- Lobby chat across active sessions
 - Bot games against [`elo-based-rec`](https://github.com/Ashutoshbind15/elo-based-rec)
 - Postgres-backed player and game history storage
 
@@ -43,7 +42,7 @@ Bubble Tea program per session
 
 ### Runtime Design
 
-The system is structured around one `Bubble Tea` model per SSH session. Each connected user gets an isolated UI state machine, while shared managers coordinate cross-session behavior such as multiplayer games, live clocks, and chat delivery.
+The system is structured around one `Bubble Tea` model per SSH session. Each connected user gets an isolated UI state machine, while shared managers coordinate cross-session behavior such as multiplayer games and live clocks.
 
 That split is the core architectural idea in this project:
 
@@ -61,7 +60,7 @@ The `main` package owns transport and UI orchestration: it starts the SSH server
 
 #### `SessionManager`
 
-`SessionManager` maps player fingerprints to active Bubble Tea programs so the server can push chat, opponent, clock, and forfeit updates into the right sessions.
+`SessionManager` maps player fingerprints to active Bubble Tea programs so the server can push opponent, clock, and forfeit updates into the right sessions.
 
 #### `GameManager`
 
@@ -89,7 +88,7 @@ The `main` package owns transport and UI orchestration: it starts the SSH server
 
 1. A user connects over SSH and gets a Bubble Tea session.
 2. The server identifies the player by SSH public key fingerprint.
-3. The player profile is loaded from Postgres or created on first use.
+3. The player profile is loaded from Postgres or auto-created with a deterministic pet name on first use.
 4. The player creates or joins a live in-memory game.
 5. Moves are validated through `notnil/chess`.
 6. Opponent sessions receive update messages through `SessionManager`.
@@ -180,7 +179,6 @@ Example values are provided in `.env.example`.
 ├── intro.go             # profile loading and historical game list
 ├── game.go              # multiplayer game UI and board interaction
 ├── bot.go               # bot game UI and engine-driven play
-├── chat.go              # lobby chat
 ├── menu.go              # page selection UI
 ├── session.go           # active session registry
 ├── managers/

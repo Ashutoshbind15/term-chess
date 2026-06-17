@@ -87,8 +87,7 @@ func newRendererItemStyles(r *lipgloss.Renderer) list.DefaultItemStyles {
 
 func newPageList(width, height int, r *lipgloss.Renderer) list.Model {
 	items := []list.Item{
-		pageMenuItem{page: PageIntro, title: "Intro", description: "Set or view your username"},
-		pageMenuItem{page: PageChat, title: "Chat", description: "Lobby chat"},
+		pageMenuItem{page: PageIntro, title: "Intro", description: "Profile and game history"},
 		pageMenuItem{page: PageGame, title: "Game", description: "Play a game"},
 		pageMenuItem{page: PageBot, title: "Bot", description: "Play vs computer (untimed)"},
 	}

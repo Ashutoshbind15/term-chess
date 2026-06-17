@@ -6,7 +6,6 @@ import (
 	"github.com/Ashutoshbind15/ssh-chess/common"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -14,7 +13,6 @@ import (
 type introModel struct {
 	ctx *Context
 
-	usernameInput   textinput.Model
 	usernameSpinner spinner.Model
 	gamesTable      table.Model
 
@@ -27,13 +25,8 @@ type introModel struct {
 }
 
 func newIntroModel(ctx *Context) introModel {
-	usernameInput := common.InitTextInput()
-	applyRendererTextInputStyles(&usernameInput, ctx.renderer)
-	usernameInput.Width = textInputViewWidth
-
 	return introModel{
 		ctx:             ctx,
-		usernameInput:   usernameInput,
 		usernameSpinner: common.InitSpinner(),
 		gamesTable:      newGamesTable(),
 		introLoading:    true,
@@ -49,16 +42,12 @@ func (m introModel) Init() tea.Cmd {
 		return tea.Batch(
 			m.usernameSpinner.Tick,
 			loadPlayerCmd(m.ctx.fingerPrint),
-			m.usernameInput.Focus(),
 		)
 	}
 	return nil
 }
 
 func (m introModel) Activate() (introModel, tea.Cmd) {
-	if m.ctx.player == nil && !m.busy() {
-		return m, m.usernameInput.Focus()
-	}
 	return m, nil
 }
 
@@ -151,8 +140,16 @@ func (m introModel) startGamesLoad() (introModel, tea.Cmd) {
 	return m, tea.Batch(m.usernameSpinner.Tick, loadGamesCmd(m.ctx.fingerPrint))
 }
 
-func navigateToChatCmd() tea.Cmd {
-	return func() tea.Msg { return navigateMsg{page: PageChat} }
+func (m introModel) createPlayer() (introModel, tea.Cmd) {
+	username := common.UsernameForFingerprint(m.ctx.fingerPrint)
+	p := common.Player{Fingerprint: m.ctx.fingerPrint, Username: username}
+	m.introErr = ""
+	m.introSaving = true
+	return m, tea.Batch(m.usernameSpinner.Tick, savePlayerCmd(p, m.ctx.fingerPrint))
+}
+
+func navigateToGameCmd() tea.Cmd {
+	return func() tea.Msg { return navigateMsg{page: PageGame} }
 }
 
 func (m introModel) Update(msg tea.Msg) (introModel, tea.Cmd) {
@@ -175,66 +172,41 @@ func (m introModel) Update(msg tea.Msg) (introModel, tea.Cmd) {
 		m.introLoading = false
 		if msg.err != nil {
 			m.introErr = msg.err.Error()
-			return m, m.usernameInput.Focus()
+			return m, nil
 		}
 		m.introErr = ""
 		if msg.player != nil {
 			m.ctx.player = msg.player
 			gameManager.SetPlayer(m.ctx.fingerPrint, msg.player.Username)
-			m.usernameInput.SetValue(msg.player.Username)
 			return m.startGamesLoad()
 		}
-		return m, m.usernameInput.Focus()
+		return m.createPlayer()
 	case savePlayerMsg:
 		m.introSaving = false
 		if msg.err != nil {
 			m.introErr = msg.err.Error()
-			return m, m.usernameInput.Focus()
+			return m, nil
 		}
 		m.introErr = ""
 		player := msg.player
 		m.ctx.player = &player
 		loaded, loadCmd := m.startGamesLoad()
-		return loaded, tea.Batch(loadCmd, navigateToChatCmd())
+		return loaded, tea.Batch(loadCmd, navigateToGameCmd())
 	}
 
 	if m.busy() {
-		var spCmd, tiCmd tea.Cmd
+		var spCmd tea.Cmd
 		m.usernameSpinner, spCmd = m.usernameSpinner.Update(msg)
-		if _, ok := msg.(tea.KeyMsg); !ok {
-			m.usernameInput, tiCmd = m.usernameInput.Update(msg)
-		}
-		return m, tea.Batch(spCmd, tiCmd)
+		return m, spCmd
 	}
 
 	if m.ctx.player != nil {
 		if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
-			return m, navigateToChatCmd()
-		}
-		return m, nil
-	}
-
-	var cmd tea.Cmd
-	m.usernameInput, cmd = m.usernameInput.Update(msg)
-
-	if key, ok := msg.(tea.KeyMsg); ok {
-		if m.introErr != "" && key.String() != "enter" {
-			m.introErr = ""
-		}
-		if key.String() == "enter" {
-			username := strings.TrimSpace(m.usernameInput.Value())
-			if m.ctx.player == nil && username != "" {
-				m.usernameInput.SetValue(username)
-				p := common.Player{Fingerprint: m.ctx.fingerPrint, Username: username}
-				m.introErr = ""
-				m.introSaving = true
-				m.usernameInput.Blur()
-				return m, tea.Batch(m.usernameSpinner.Tick, savePlayerCmd(p, m.ctx.fingerPrint))
-			}
+			return m, navigateToGameCmd()
 		}
 	}
 
-	return m, cmd
+	return m, nil
 }
 
 func (m introModel) View() string {
@@ -278,13 +250,11 @@ func (m introModel) View() string {
 	switch {
 	case m.introLoading:
 		lines = append(lines, m.usernameSpinner.View()+" loading profile...")
+	case m.introSaving:
+		lines = append(lines, m.usernameSpinner.View()+" setting up profile...")
 	case m.ctx.player == nil:
-		lines = append(lines, m.usernameInput.View())
 		if m.introErr != "" {
 			lines = append(lines, r.NewStyle().Foreground(lipgloss.Color("9")).Render(m.introErr))
-		}
-		if m.introSaving {
-			lines = append(lines, m.usernameSpinner.View()+" saving profile...")
 		}
 	default:
 		welcomeStyle := r.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)

@@ -301,8 +301,8 @@ func gamesRefreshCmd() tea.Cmd {
 	return func() tea.Msg { return gamesRefreshMsg{} }
 }
 
-func navigateToChatCmdGame() tea.Cmd {
-	return func() tea.Msg { return navigateMsg{page: PageChat} }
+func navigateToGameLobbyCmd() tea.Cmd {
+	return func() tea.Msg { return navigateMsg{page: PageGame} }
 }
 
 // --- Helpers used by both Update and View -----------------------------------
@@ -734,7 +734,7 @@ func (m gameModel) updateGameLobby(msg tea.Msg) (gameModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "esc":
-			return m, navigateToChatCmdGame()
+			return m, navigateToGameLobbyCmd()
 		case "1":
 			m.selectedTimeControl = TimeControl1
 			return m, nil
@@ -774,7 +774,7 @@ func (m gameModel) updateGameLobby(msg tea.Msg) (gameModel, tea.Cmd) {
 // Nothing to do here besides letting the player back out.
 func (m gameModel) updateGameWaiting(msg tea.Msg) (gameModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
-		return m, navigateToChatCmdGame()
+		return m, navigateToGameLobbyCmd()
 	}
 	return m, nil
 }
@@ -792,7 +792,7 @@ func (m gameModel) updateGameInProgress(msg tea.Msg) (gameModel, tea.Cmd) {
 		case "esc":
 			m.selected = ""
 			m.possibleMoves = nil
-			return m, navigateToChatCmdGame()
+			return m, navigateToGameLobbyCmd()
 		case "ctrl+x":
 			return m, resignGameCmd(m.ctx.fingerPrint)
 		}
@@ -913,7 +913,7 @@ func (m gameModel) updateGameFinished(msg tea.Msg) (gameModel, tea.Cmd) {
 		switch key.String() {
 		case "esc":
 			m = m.clearFinishedGame()
-			return m, navigateToChatCmdGame()
+			return m, navigateToGameLobbyCmd()
 		case "ctrl+n":
 			tc := m.snapshot.TimeControl
 			m = m.clearFinishedGame()
