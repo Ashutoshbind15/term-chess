@@ -175,10 +175,11 @@ type gamesRefreshMsg struct{}
 type Page string
 
 const (
-	PageIntro  Page = "intro"
-	PageSelect Page = "select"
-	PageGame   Page = "game"
-	PageBot    Page = "bot"
+	PageIntro   Page = "intro"
+	PageSelect  Page = "select"
+	PageGame    Page = "game"
+	PageBot     Page = "bot"
+	PagePrivacy Page = "privacy"
 )
 
 type TimeControlChoice int

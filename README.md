@@ -17,6 +17,13 @@ https://github.com/user-attachments/assets/fa54412a-5fb7-4ed3-9b15-69c7f5b00817
 - Bot games against [`elo-based-rec`](https://github.com/Ashutoshbind15/elo-based-rec)
 - Postgres-backed player and game history storage
 
+## Legal
+
+Term Chess is operated by Bind Ashutosh Parasnath as an individual side project. See [LEGAL.md](./LEGAL.md) or the canonical site pages:
+
+- [Terms of Service](https://termchess.ashutoshbind.com/terms)
+- [Privacy Policy](https://termchess.ashutoshbind.com/privacy)
+
 ## Architecture
 
 ### High-Level View

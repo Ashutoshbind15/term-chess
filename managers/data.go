@@ -56,8 +56,40 @@ func (dm *DataManager) AddPlayer(player common.Player) error {
 	return dm.db.Create(&player).Error
 }
 
-func (dm *DataManager) DeletePlayer(fingerprint string) {
-	dm.db.Delete(&common.Player{}, "fingerprint = ?", fingerprint)
+const deletedPlayerUsername = "[deleted]"
+
+// DeletePlayerData removes the player profile and bot games, and anonymizes
+// the player's side of stored multiplayer game records.
+func (dm *DataManager) DeletePlayerData(fingerprint string) error {
+	if strings.TrimSpace(fingerprint) == "" {
+		return fmt.Errorf("missing fingerprint")
+	}
+
+	return dm.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("player_fingerprint = ?", fingerprint).Delete(&common.BotGame{}).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&common.Game{}).
+			Where("white_fingerprint = ?", fingerprint).
+			Updates(map[string]any{
+				"white_fingerprint": "",
+				"white_username":    deletedPlayerUsername,
+			}).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&common.Game{}).
+			Where("black_fingerprint = ?", fingerprint).
+			Updates(map[string]any{
+				"black_fingerprint": "",
+				"black_username":    deletedPlayerUsername,
+			}).Error; err != nil {
+			return err
+		}
+
+		return tx.Where("fingerprint = ?", fingerprint).Delete(&common.Player{}).Error
+	})
 }
 
 func (dm *DataManager) AddGame(game common.Game) error {

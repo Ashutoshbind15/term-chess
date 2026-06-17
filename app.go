@@ -49,6 +49,7 @@ type appModel struct {
 	menu  menuModel
 	game  gameModel
 	bot   botModel
+	priv  privacyModel
 }
 
 func (m appModel) Init() tea.Cmd {
@@ -120,6 +121,10 @@ func (m appModel) activateCurrentPage() (appModel, tea.Cmd) {
 		var cmd tea.Cmd
 		m.bot, cmd = m.bot.Activate()
 		return m, cmd
+	case PagePrivacy:
+		var cmd tea.Cmd
+		m.priv, cmd = m.priv.Activate()
+		return m, cmd
 	}
 	return m, nil
 }
@@ -166,6 +171,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.bot, cmd = m.bot.Update(msg)
 		return m, cmd
+	case deletePlayerDataMsg, disconnectAfterDeleteMsg:
+		var cmd tea.Cmd
+		m.priv, cmd = m.priv.Update(msg)
+		return m, cmd
 	case gamesRefreshMsg, loadGamesMsg, loadPlayerMsg, savePlayerMsg:
 		var cmd tea.Cmd
 		m.intro, cmd = m.intro.Update(msg)
@@ -194,6 +203,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.bot, cmd = m.bot.Update(msg)
 		return m, cmd
+	case PagePrivacy:
+		var cmd tea.Cmd
+		m.priv, cmd = m.priv.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }
@@ -221,7 +234,7 @@ func (m appModel) View() string {
 		Align(lipgloss.Center).
 		Width(m.ctx.width).
 		Foreground(lipgloss.Color("241"))
-	footer := footerStyle.Render("Page: " + string(m.page) + " | tab · menu | ctrl+c · quit")
+	footer := footerStyle.Render(termsNotice)
 
 	var pageContent string
 	switch m.page {
@@ -233,6 +246,8 @@ func (m appModel) View() string {
 		pageContent = m.game.View()
 	case PageBot:
 		pageContent = m.bot.View()
+	case PagePrivacy:
+		pageContent = m.priv.View()
 	default:
 		pageContent = "Unknown page"
 	}

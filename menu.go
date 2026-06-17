@@ -90,6 +90,7 @@ func newPageList(width, height int, r *lipgloss.Renderer) list.Model {
 		pageMenuItem{page: PageIntro, title: "Intro", description: "Profile and game history"},
 		pageMenuItem{page: PageGame, title: "Game", description: "Play a game"},
 		pageMenuItem{page: PageBot, title: "Bot", description: "Play vs computer (untimed)"},
+		pageMenuItem{page: PagePrivacy, title: "Privacy", description: "Data rights and deletion"},
 	}
 	delegate := list.NewDefaultDelegate()
 	delegate.Styles = newRendererItemStyles(r)

@@ -37,5 +37,6 @@ func newAppModel(fingerPrint string, renderer *lipgloss.Renderer, dump io.Writer
 		menu:  newMenuModel(ctx),
 		game:  newGameModel(ctx),
 		bot:   newBotModel(ctx),
+		priv:  newPrivacyModel(ctx),
 	}
 }

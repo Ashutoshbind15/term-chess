@@ -250,6 +250,21 @@ func (gm *GameManager) SetPlayer(fingerprint string, username string) {
 	}
 }
 
+func (gm *GameManager) IsPlayerBusy(fingerprint string) bool {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+
+	player := gm.players[fingerprint]
+	return player != nil && player.currentGameId != ""
+}
+
+func (gm *GameManager) RemovePlayer(fingerprint string) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+
+	delete(gm.players, fingerprint)
+}
+
 func (gm *GameManager) getColor() chess.Color {
 	randomColor := rand.Intn(2) == 0
 	if randomColor {
