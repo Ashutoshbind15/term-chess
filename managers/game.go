@@ -2,6 +2,7 @@ package managers
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
 	"strings"
 	"sync"
@@ -192,6 +193,135 @@ type GameManager struct {
 	games   map[string]*Game
 	codes   map[string]string // display code -> internal id
 	players map[string]*GamePlayer
+	store   LiveGameStore
+}
+
+type LiveGameStore interface {
+	AppendLiveGameSnapshot(payload common.LiveGamePayload) error
+	LoadActiveGameSnapshots() ([]common.LiveGamePayload, error)
+	DeleteLiveGameEvents(gameID string) error
+}
+
+func (gm *GameManager) SetLiveGameStore(store LiveGameStore) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	gm.store = store
+}
+
+func (g *Game) toLiveGamePayload() common.LiveGamePayload {
+	payload := common.LiveGamePayload{
+		GameID:          g.id,
+		Code:            g.code,
+		Status:          g.status,
+		TimeControl:     int(g.timeControl),
+		WhiteTimeLeftMs: g.whiteTimeLeft.Milliseconds(),
+		BlackTimeLeftMs: g.blackTimeLeft.Milliseconds(),
+	}
+	if g.whitePlayer != nil {
+		payload.WhiteFingerprint = g.whitePlayer.fingerprint
+		payload.WhiteUsername = g.whitePlayer.username
+	}
+	if g.blackPlayer != nil {
+		payload.BlackFingerprint = g.blackPlayer.fingerprint
+		payload.BlackUsername = g.blackPlayer.username
+	}
+	if g.game != nil {
+		for _, move := range g.game.Moves() {
+			payload.Moves = append(payload.Moves, move.String())
+		}
+	}
+	if !g.turnStartedAt.IsZero() {
+		s := g.turnStartedAt.UTC().Format(time.RFC3339Nano)
+		payload.TurnStartedAt = &s
+	}
+	return payload
+}
+
+func (gm *GameManager) persistLocked(g *Game) error {
+	if gm.store == nil {
+		return nil
+	}
+	return gm.store.AppendLiveGameSnapshot(g.toLiveGamePayload())
+}
+
+func (gm *GameManager) RestoreActiveGames(store LiveGameStore) error {
+	payloads, err := store.LoadActiveGameSnapshots()
+	if err != nil {
+		return err
+	}
+
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+
+	for _, payload := range payloads {
+		if err := gm.restorePayloadLocked(payload, store); err != nil {
+			log.Printf("restore active game %s: %v", payload.GameID, err)
+		}
+	}
+	return nil
+}
+
+func (gm *GameManager) restorePayloadLocked(payload common.LiveGamePayload, store LiveGameStore) error {
+	if gm.games[payload.GameID] != nil {
+		return fmt.Errorf("game already loaded")
+	}
+
+	cg := chess.NewGame(chess.UseNotation(chess.UCINotation{}))
+	for _, move := range payload.Moves {
+		if err := cg.MoveStr(move); err != nil {
+			_ = store.DeleteLiveGameEvents(payload.GameID)
+			return fmt.Errorf("replay move %q: %w", move, err)
+		}
+	}
+
+	g := &Game{
+		id:            payload.GameID,
+		code:          payload.Code,
+		status:        payload.Status,
+		game:          cg,
+		timeControl:   TimeControl(payload.TimeControl),
+		whiteTimeLeft: time.Duration(payload.WhiteTimeLeftMs) * time.Millisecond,
+		blackTimeLeft: time.Duration(payload.BlackTimeLeftMs) * time.Millisecond,
+	}
+	if payload.TurnStartedAt != nil && *payload.TurnStartedAt != "" {
+		t, err := time.Parse(time.RFC3339Nano, *payload.TurnStartedAt)
+		if err != nil {
+			_ = store.DeleteLiveGameEvents(payload.GameID)
+			return fmt.Errorf("parse turn_started_at: %w", err)
+		}
+		g.turnStartedAt = t
+	}
+
+	if payload.WhiteFingerprint != "" {
+		white := gm.players[payload.WhiteFingerprint]
+		if white == nil {
+			white = &GamePlayer{
+				fingerprint: payload.WhiteFingerprint,
+				username:    payload.WhiteUsername,
+			}
+			gm.players[payload.WhiteFingerprint] = white
+		}
+		white.currentGameId = payload.GameID
+		g.whitePlayer = white
+	}
+	if payload.BlackFingerprint != "" {
+		black := gm.players[payload.BlackFingerprint]
+		if black == nil {
+			black = &GamePlayer{
+				fingerprint: payload.BlackFingerprint,
+				username:    payload.BlackUsername,
+			}
+			gm.players[payload.BlackFingerprint] = black
+		}
+		black.currentGameId = payload.GameID
+		g.blackPlayer = black
+	}
+
+	gm.games[payload.GameID] = g
+	if payload.Code != "" {
+		gm.codes[payload.Code] = payload.GameID
+	}
+	return nil
 }
 
 func NewGameManager() *GameManager {
@@ -306,6 +436,13 @@ func (gm *GameManager) CreateGame(fingerprint string, tc TimeControl) (*Snapshot
 	gm.games[gameId] = g
 	gm.codes[code] = gameId
 
+	if err := gm.persistLocked(g); err != nil {
+		delete(gm.games, gameId)
+		delete(gm.codes, code)
+		player.currentGameId = ""
+		return nil, err
+	}
+
 	return g.snapshot(), nil
 }
 
@@ -352,6 +489,10 @@ func (gm *GameManager) JoinRandomGame(fingerprint string, tc TimeControl) (*Snap
 	halfGame.turnStartedAt = time.Now()
 	player.currentGameId = halfGame.id
 
+	if err := gm.persistLocked(halfGame); err != nil {
+		return nil, err
+	}
+
 	return halfGame.snapshot(), nil
 }
 
@@ -394,6 +535,10 @@ func (gm *GameManager) JoinGame(fingerprint string, gameId string) (*Snapshot, e
 	game.status = GameStatusInProgress
 	game.turnStartedAt = time.Now()
 	player.currentGameId = gameID
+
+	if err := gm.persistLocked(game); err != nil {
+		return nil, err
+	}
 
 	return game.snapshot(), nil
 }
@@ -472,7 +617,67 @@ func (gm *GameManager) MakeMove(fingerprint string, move string) (*Snapshot, err
 		game.turnStartedAt = time.Now()
 	}
 
+	if err := gm.persistLocked(game); err != nil {
+		return nil, err
+	}
+
 	return game.snapshot(), nil
+}
+
+// EndActiveGameForDeletion resigns an in-progress multiplayer game or
+// abandons a waiting lobby when the player is deleting their data.
+// Returns a finished snapshot when the game was resigned, nil otherwise.
+func (gm *GameManager) EndActiveGameForDeletion(fingerprint string) (*Snapshot, error) {
+	gm.mu.Lock()
+	player := gm.players[fingerprint]
+	if player == nil || player.currentGameId == "" {
+		gm.mu.Unlock()
+		return nil, nil
+	}
+	game := gm.games[player.currentGameId]
+	if game == nil {
+		gm.mu.Unlock()
+		return nil, nil
+	}
+	status := game.status
+	gm.mu.Unlock()
+
+	if status == GameStatusInProgress {
+		return gm.Resign(fingerprint)
+	}
+	if status != GameStatusWaiting {
+		return nil, nil
+	}
+
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+
+	player = gm.players[fingerprint]
+	if player == nil || player.currentGameId == "" {
+		return nil, nil
+	}
+	game = gm.games[player.currentGameId]
+	if game == nil || game.status != GameStatusWaiting {
+		return nil, nil
+	}
+
+	gameID := game.id
+	if gm.store != nil {
+		if err := gm.store.DeleteLiveGameEvents(gameID); err != nil {
+			return nil, err
+		}
+	}
+	if game.whitePlayer != nil {
+		game.whitePlayer.currentGameId = ""
+	}
+	if game.blackPlayer != nil {
+		game.blackPlayer.currentGameId = ""
+	}
+	if game.code != "" {
+		delete(gm.codes, game.code)
+	}
+	delete(gm.games, gameID)
+	return nil, nil
 }
 
 // Resign ends the player's current game with them as the loser.
@@ -527,6 +732,11 @@ func (gm *GameManager) Resign(fingerprint string) (*Snapshot, error) {
 
 	game.game.Resign(playerColor)
 	game.status = GameStatusFinished
+
+	if err := gm.persistLocked(game); err != nil {
+		return nil, err
+	}
+
 	return game.snapshot(), nil
 }
 
@@ -566,6 +776,9 @@ func (gm *GameManager) EndByTimeForfeit(gameID string, loser chess.Color) *Snaps
 	snap := game.snapshot()
 	if snap != nil {
 		snap.Method = MethodTimeForfeit
+	}
+	if err := gm.persistLocked(game); err != nil {
+		return nil
 	}
 	return snap
 }

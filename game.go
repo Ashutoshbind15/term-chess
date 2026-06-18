@@ -10,6 +10,7 @@ import (
 	"github.com/Ashutoshbind15/ssh-chess/managers"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/log"
 	"github.com/charmbracelet/lipgloss"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/notnil/chess"
@@ -293,6 +294,9 @@ func finalizeGameAction(snap *managers.Snapshot, actorFingerprint, move string) 
 func persistFinishedGame(gameID string) {
 	record := gameManager.BuildGameRecord(gameID)
 	if err := dataManager.AddGame(record); err == nil {
+		if err := dataManager.DeleteLiveGameEvents(gameID); err != nil {
+			log.Error("failed to delete live game events", "id", gameID, "error", err)
+		}
 		gameManager.RemoveGame(gameID)
 	}
 }

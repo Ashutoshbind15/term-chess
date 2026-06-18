@@ -55,6 +55,11 @@ func main() {
 	botGameManager = managers.NewBotGameManager()
 	botAPIManager = managers.NewBotAPIManager()
 
+	gameManager.SetLiveGameStore(dataManager)
+	if err := gameManager.RestoreActiveGames(dataManager); err != nil {
+		log.Error("failed to restore active games", "error", err)
+	}
+
 	clockStop := make(chan struct{})
 	defer close(clockStop)
 	go runClockTicker(clockStop)

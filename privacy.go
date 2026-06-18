@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -49,10 +48,12 @@ func (m privacyModel) Activate() (privacyModel, tea.Cmd) {
 
 func deletePlayerDataCmd(fingerprint string) tea.Cmd {
 	return func() tea.Msg {
-		if gameManager.IsPlayerBusy(fingerprint) || botGameManager.IsPlayerBusy(fingerprint) {
-			return deletePlayerDataMsg{
-				err: fmt.Errorf("finish or resign active games before deleting your data"),
-			}
+		snap, err := gameManager.EndActiveGameForDeletion(fingerprint)
+		if err != nil {
+			return deletePlayerDataMsg{err: err}
+		}
+		if snap != nil {
+			finalizeGameAction(snap, fingerprint, "")
 		}
 
 		if err := dataManager.DeletePlayerData(fingerprint); err != nil {

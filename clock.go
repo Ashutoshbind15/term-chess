@@ -81,6 +81,10 @@ func handleTimeForfeit(info managers.TickInfo) {
 	record.Method = managers.MethodTimeForfeit
 	if err := dataManager.AddGame(record); err != nil {
 		log.Error("failed to persist time-forfeit game", "id", gameID, "error", err)
+		return
+	}
+	if err := dataManager.DeleteLiveGameEvents(gameID); err != nil {
+		log.Error("failed to delete live game events", "id", gameID, "error", err)
 	}
 	gameManager.RemoveGame(gameID)
 

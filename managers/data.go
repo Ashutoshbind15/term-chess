@@ -33,7 +33,7 @@ func (dm *DataManager) Init() {
 		panic(fmt.Sprintf("failed to connect database: %v", err))
 	}
 
-	if err := db.AutoMigrate(&common.Player{}, &common.Game{}, &common.BotGame{}); err != nil {
+	if err := db.AutoMigrate(&common.Player{}, &common.Game{}, &common.BotGame{}, &common.LiveGameEvent{}); err != nil {
 		panic(err)
 	}
 
@@ -114,6 +114,14 @@ func anonymizeMultiplayerGames(tx *gorm.DB, fingerprint string) error {
 	return tx.Unscoped().Where("id IN ?", removeIDs).Delete(&common.Game{}).Error
 }
 
+func deleteLiveGameEventsForPlayer(tx *gorm.DB, fingerprint string) error {
+	return tx.Exec(`
+		DELETE FROM live_game_events
+		WHERE payload->>'white_fingerprint' = ?
+		   OR payload->>'black_fingerprint' = ?
+	`, fingerprint, fingerprint).Error
+}
+
 // DeletePlayerData removes the player profile and bot games, and anonymizes
 // the player's side of stored multiplayer game records.
 func (dm *DataManager) DeletePlayerData(fingerprint string) error {
@@ -129,6 +137,10 @@ func (dm *DataManager) DeletePlayerData(fingerprint string) error {
 		}
 
 		if err := anonymizeMultiplayerGames(tx, fingerprint); err != nil {
+			return err
+		}
+
+		if err := deleteLiveGameEventsForPlayer(tx, fingerprint); err != nil {
 			return err
 		}
 
